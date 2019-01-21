@@ -502,6 +502,8 @@ make_hho_laplacian_interface(const cuthho_mesh<T, ET>& msh,
 }
 
 
+//////////////////////  VECTOR GRADREC  /////////////////////////////
+
 
 template<typename T, size_t ET>
 std::pair<   Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>,
@@ -758,6 +760,166 @@ make_hho_gradrec_vector_interface(const cuthho_mesh<T, ET>& msh,
     return std::make_pair(oper, data);
 }
 
+
+//////////////////////  MATRIX GRADREC  /////////////////////////////
+//
+// The versions of gradrec_matrix written here can be optimized
+// by taking into account the structure of the basis.
+// We can then defining it by using gradrec_vector
+//
+
+template<typename T, size_t ET>
+std::pair<   Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>,
+             Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>  >
+make_hho_gradrec_matrix(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl, const hho_degree_info& di)
+{
+    typedef Matrix<T, Dynamic, Dynamic> matrix_type;
+    typedef Matrix<T, Dynamic, 1>       vector_type;
+
+    const auto celdeg  = di.cell_degree();
+    const auto facdeg  = di.face_degree();
+    const auto graddeg = di.grad_degree();
+
+    vector_cell_basis<cuthho_mesh<T, ET>,T>            cb(msh, cl, celdeg);
+    matrix_cell_basis<cuthho_mesh<T, ET>,T>            gb(msh, cl, graddeg);
+    
+    auto cbs = vector_cell_basis<cuthho_mesh<T, ET>,T>::size(celdeg);
+    auto fbs = vector_face_basis<cuthho_mesh<T, ET>,T>::size(facdeg);
+    auto gbs = matrix_cell_basis<cuthho_mesh<T, ET>,T>::size(graddeg);
+    
+    const auto num_faces = faces(msh, cl).size();
+
+    matrix_type         gr_lhs = matrix_type::Zero(gbs, gbs);
+    matrix_type         gr_rhs = matrix_type::Zero(gbs, cbs + num_faces * fbs);
+
+    if(celdeg > 0)
+    {
+        const auto qps = integrate(msh, cl, celdeg - 1 + facdeg);
+        for (auto& qp : qps)
+        {
+            const auto c_dphi = cb.eval_gradients(qp.first);
+            const auto g_phi  = gb.eval_basis(qp.first);
+
+            
+            gr_lhs.block(0, 0, gbs, gbs) += qp.second * g_phi * g_phi.transpose();
+            gr_rhs.block(0, 0, gbs, cbs) += qp.second * g_phi * c_dphi.transpose();
+        }
+    }
+
+    const auto fcs = faces(msh, cl);
+    const auto ns = normals(msh, cl);
+    for (size_t i = 0; i < fcs.size(); i++)
+    {
+        const auto fc = fcs[i];
+        const auto n  = ns[i];
+        vector_face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg);
+
+        const auto qps_f = integrate(msh, fc, facdeg + std::max(facdeg, celdeg));
+        for (auto& qp : qps_f)
+        {
+            const vector_type c_phi      = cb.eval_basis(qp.first);
+            const vector_type f_phi      = fb.eval_basis(qp.first);
+            const auto        g_phi      = gb.eval_basis(qp.first);
+            const vector_type qp_g_phi_n = qp.second * g_phi * n;
+
+            gr_rhs.block(0, cbs + i * fbs, gbs, fbs) += qp_g_phi_n * f_phi.transpose();
+            gr_rhs.block(0, 0, gbs, cbs) -= qp_g_phi_n * c_phi.transpose();
+        }
+    }
+
+    matrix_type oper = gr_lhs.ldlt().solve(gr_rhs);
+    matrix_type data = gr_rhs.transpose() * oper;
+
+    return std::make_pair(oper, data);    
+}
+
+
+
+
+template<typename T, size_t ET, typename Function>
+std::pair<   Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>,
+             Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>  >
+make_hho_gradrec_matrix(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl, const Function& level_set_function, const hho_degree_info& di, element_location where)
+{
+
+    if ( !is_cut(msh, cl) )
+        return make_hho_gradrec_matrix(msh, cl, di);
+
+    typedef Matrix<T, Dynamic, Dynamic> matrix_type;
+    typedef Matrix<T, Dynamic, 1>       vector_type;
+
+    const auto celdeg  = di.cell_degree();
+    const auto facdeg  = di.face_degree();
+    const auto graddeg = di.grad_degree();
+    
+    vector_cell_basis<cuthho_mesh<T, ET>,T>            cb(msh, cl, celdeg);
+    matrix_cell_basis<cuthho_mesh<T, ET>,T>            gb(msh, cl, graddeg);
+
+
+    auto cbs = vector_cell_basis<cuthho_mesh<T, ET>,T>::size(celdeg);
+    auto fbs = vector_face_basis<cuthho_mesh<T, ET>,T>::size(facdeg);
+    auto gbs = matrix_cell_basis<cuthho_mesh<T, ET>,T>::size(graddeg);
+   
+    
+    const auto num_faces = faces(msh, cl).size(); 
+    
+    matrix_type        gr_lhs = matrix_type::Zero(gbs, gbs);
+    matrix_type        gr_rhs = matrix_type::Zero(gbs, cbs + num_faces * fbs);
+
+
+    
+    const auto qps = integrate(msh, cl, celdeg - 1 + facdeg, where);
+    for (auto& qp : qps)
+    {
+        const auto c_dphi = cb.eval_gradients(qp.first);
+        const auto g_phi  = gb.eval_basis(qp.first);
+
+        gr_lhs.block(0, 0, gbs, gbs) += qp.second * g_phi * g_phi.transpose();
+        gr_rhs.block(0, 0, gbs, cbs) += qp.second * g_phi * c_dphi.transpose();
+    }
+    
+
+
+    const auto fcs = faces(msh, cl);
+    const auto ns = normals(msh, cl);
+    for (size_t i = 0; i < fcs.size(); i++)
+    {
+        const auto fc = fcs[i];
+        const auto n  = ns[i];
+        vector_face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg);
+        
+
+        const auto qps_f = integrate(msh, fc, facdeg + std::max(facdeg, celdeg), where);
+        for (auto& qp : qps_f)
+        {
+            const vector_type c_phi      = cb.eval_basis(qp.first);
+            const vector_type f_phi      = fb.eval_basis(qp.first);
+            const auto        g_phi      = gb.eval_basis(qp.first);
+            const vector_type qp_g_phi_n = qp.second * g_phi * n;
+
+            gr_rhs.block(0, cbs + i * fbs, gbs, fbs) += qp_g_phi_n * f_phi.transpose();
+            gr_rhs.block(0, 0, gbs, cbs) -= qp_g_phi_n * c_phi.transpose();
+        }
+    }
+
+
+    const auto iqps = integrate_interface(msh, cl, celdeg + graddeg, element_location::IN_NEGATIVE_SIDE);
+    for (auto& qp : iqps)
+    {
+        const auto c_phi        = cb.eval_basis(qp.first);
+        const auto g_phi        = gb.eval_basis(qp.first);
+
+        Matrix<T,2,1> n = level_set_function.normal(qp.first);
+        const vector_type qp_g_phi_n = qp.second * g_phi * n;
+        
+        gr_rhs.block(0 , 0, gbs, cbs) -= qp_g_phi_n * c_phi.transpose();
+    }
+    
+    matrix_type oper = gr_lhs.ldlt().solve(gr_rhs);
+    matrix_type data = gr_rhs.transpose() * oper;
+
+    return std::make_pair(oper, data);
+}
 
 
 
