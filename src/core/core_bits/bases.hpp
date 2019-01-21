@@ -490,10 +490,10 @@ public:
         basis_size      = 2*2*(basis_degree+2)*(basis_degree+1)/2;
     }
 
-    std::vector<function_type>
+    std::vector<matrix_type>
     eval_basis(const point_type& pt)
     {
-        std::vector<function_type> ret;
+        std::vector<matrix_type> ret;
         ret.reserve(basis_size);
         
         const auto phi = scalar_basis.eval_basis(pt);
@@ -502,13 +502,13 @@ public:
         
         for (int k = 0; k < scalar_basis.size(); k++)
         {
-            function_type fc;
+            matrix_type fc;
 
             for (int j = 0; j < 2; j++)
             {
                 for (int i = 0; i < 2; i++)
                 {
-                    fc       = function_type::Zero();
+                    fc       = matrix_type::Zero();
                     fc(i, j) = phi(k);
                     ret.push_back(fc);
                 }
