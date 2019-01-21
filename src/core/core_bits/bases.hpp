@@ -395,3 +395,67 @@ public:
         return 2*(degree+2)*(degree+1)/2;
     }
 };
+
+
+/////////
+
+template<typename Mesh, typename VT>
+class vector_face_basis
+{
+    typedef typename Mesh::coordinate_type  coordinate_type;
+    typedef typename Mesh::point_type       point_type;
+
+    point_type          face_bar;
+    point_type          base;
+    coordinate_type     face_h;
+    size_t              basis_degree, basis_size;
+
+
+    face_basis<Mesh,VT>          scalar_basis;
+    
+public:
+    vector_face_basis(const Mesh& msh, const typename Mesh::face_type& fc, size_t degree) :
+        scalar_basis(msh, fc, degree)
+    {
+        face_bar        = barycenter(msh, fc);
+        face_h          = diameter(msh, fc);
+        basis_degree    = degree;
+        basis_size      = 2*(degree+1);
+
+        auto pts = points(msh, fc);
+        base = face_bar - pts[0];
+    }
+
+    Matrix<VT, Dynamic, 2>
+    eval_basis(const point_type& pt)
+    {
+        Matrix<VT, Dynamic, 2> ret = Matrix<VT, Dynamic, 2>::Zero(basis_size, 2);
+
+        const auto psi = scalar_basis.eval_basis(pt);
+
+        for(size_t i = 0; i < scalar_basis.size(); i++)
+        {
+            ret(2 * i, 0)     = psi(i);
+            ret(2 * i + 1, 1) = psi(i);
+        }
+
+        assert(2 * scalar_basis.size() == basis_size);
+        
+        return ret;
+    }
+
+    size_t size() const
+    {
+        return basis_size;
+    }
+
+    size_t degree() const
+    {
+        return basis_degree;
+    }
+
+    static size_t size(size_t degree)
+    {
+        return 2*(degree+1);
+    }
+};
