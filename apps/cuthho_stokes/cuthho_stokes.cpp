@@ -1909,35 +1909,63 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     /************** DEFINE PROBLEM RHS, SOLUTION AND BCS **************/
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
-        RealType ret_scal = 2.0 * M_PI * M_PI * std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());
-        ret(0) = ret_scal;
-        ret(1) = ret_scal;
+
+        RealType x1 = pt.x() - 0.5;
+        RealType x2 = x1 * x1;
+        RealType y1 = pt.y() - 0.5;
+        RealType y2 = y1 * y1;
+
+        RealType ax =  x2 * (x2 - 2. * x1 + 1.);
+        RealType ay =  y2 * (y2 - 2. * y1 + 1.);
+        RealType bx =  x1 * (4. * x2 - 6. * x1 + 2.);
+        RealType by =  y1 * (4. * y2 - 6. * y1 + 2.);
+        RealType cx = 12. * x2 - 12.* x1 + 2.;
+        RealType cy = 12. * y2 - 12.* y1 + 2.;
+        RealType dx = 24. * x1 - 12.;
+        RealType dy = 24. * y1 - 12.;
+
+        ret(0) = - cx * by - ax * dy + 5.* x2 * x2;
+        ret(1) = + cy * bx + ay * dx + 5.* y2 * y2;
+
         return ret;
     };
 
-    auto sol_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
-        return std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());
+    auto sol_vel = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        Matrix<RealType, 2, 1> ret;
+
+        RealType x1 = pt.x() - 0.5;
+        RealType x2 = x1 * x1;
+        RealType y1 = pt.y() - 0.5;
+        RealType y2 = y1 * y1;
+
+        ret(0) =  x2 * (x2 - 2. * x1 + 1.)  * y1 * (4. * y2 - 6. * y1 + 2.);
+        ret(1) = -y2 * (y2 - 2. * y1 + 1. ) * x1 * (4. * x2 - 6. * x1 + 2.);
+
+        return ret;
     };
 
     auto sol_grad = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 2> ret;
 
-        ret(0,0) = M_PI * std::cos(M_PI*pt.x()) * std::sin(M_PI*pt.y());
-        ret(0,1) = M_PI * std::sin(M_PI*pt.x()) * std::cos(M_PI*pt.y());
-
-        ret(1,0) = M_PI * std::cos(M_PI*pt.x()) * std::sin(M_PI*pt.y());
-        ret(1,1) = M_PI * std::sin(M_PI*pt.x()) * std::cos(M_PI*pt.y());
+        RealType x1 = pt.x() - 0.5;
+        RealType x2 = x1 * x1;
+        RealType y1 = pt.y() - 0.5;
+        RealType y2 = y1 * y1;
+        
+        ret(0,0) = x1 * (4. * x2 - 6. * x1 + 2.) * y1 * (4. * y2 - 6. * y1 + 2.);
+        ret(0,1) = x2 * ( x2 - 2. * x1 + 1.) * (12. * y2 - 12. * y1 + 2.);
+        ret(1,0) = - y2 * ( y2 - 2. * y1 + 1.) * (12. * x2 - 12. * x1 + 2.);
+        ret(1,1) = - ret(0,0);
         
         return ret;
     };
 
     auto bcs_fun = [&](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
-        Matrix<RealType, 2, 1> ret;
-        RealType ret_scal = sol_fun(pt);
-        ret(0) = ret_scal;
-        ret(1) = ret_scal;
+        return sol_vel(pt);
+    };
 
-        return ret;
+    auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
+        return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - 0.5, 5.);
     };
 
 
