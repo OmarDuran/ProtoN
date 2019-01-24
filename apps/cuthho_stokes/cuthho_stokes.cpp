@@ -1697,6 +1697,37 @@ make_vector_rhs(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>
 
 
 
+template<typename T, size_t ET, typename F1, typename F2>
+Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, 1>
+make_pressure_rhs(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl,
+         size_t degree, const element_location where, const F1& level_set_function, const F2& bcs)
+{
+    if( location(msh, cl) != element_location::ON_INTERFACE )
+    {
+        auto cbs = cell_basis<cuthho_mesh<T, ET>,T>::size(degree);
+        Matrix<T, Dynamic, 1> ret = Matrix<T, Dynamic, 1>::Zero(cbs);
+        return ret;
+    }
+    else
+    {
+        cell_basis<cuthho_mesh<T, ET>,T> cb(msh, cl, degree);
+        auto cbs = cb.size();
+        Matrix<T, Dynamic, 1> ret = Matrix<T, Dynamic, 1>::Zero(cbs);
+
+        auto qpsi = integrate_interface(msh, cl, 2*degree, element_location::IN_NEGATIVE_SIDE );
+        for (auto& qp : qpsi)
+        {
+            auto phi = cb.eval_basis(qp.first);
+            auto n = level_set_function.normal(qp.first);
+            
+            ret -= qp.second * bcs(qp.first).dot(n) * phi;
+        }
+        
+        return ret;
+    }
+}
+
+
 template<typename T, size_t ET, typename F1>
 Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, 1>
 make_flux_jump(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl,
@@ -2000,6 +2031,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
             Matrix<RealType, Dynamic, Dynamic> lc = gr.second + stab;
             Matrix<RealType, Dynamic, 1> f = Matrix<RealType, Dynamic, 1>::Zero(lc.rows());
             f = make_vector_rhs(msh, cl, hdi.cell_degree(), rhs_fun, where, level_set_function, bcs_fun, gr.first);
+            Matrix<RealType, Dynamic, 1> p_rhs = make_pressure_rhs(msh, cl, hdi.face_degree(), where, level_set_function, bcs_fun);
             assembler.assemble(msh, cl, lc, f, bcs_fun);
         }
     }
