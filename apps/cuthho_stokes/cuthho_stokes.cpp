@@ -1023,6 +1023,149 @@ make_hho_gradrec_matrix(const cuthho_mesh<T, ET>& msh, const typename cuthho_mes
 }
 
 
+//////////////////  DIVERGENCE RECONSTRUCTION  //////////////////////////
+
+
+
+template<typename T, size_t ET>
+std::pair<   Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>,
+             Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>  >
+make_hho_divergence_reconstruction(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl, const hho_degree_info& di)
+{
+    typedef Matrix<T, Dynamic, Dynamic> matrix_type;
+
+    const auto celdeg = di.cell_degree();
+    const auto facdeg = di.face_degree();
+    const auto recdeg = di.face_degree();
+
+    cell_basis<cuthho_mesh<T, ET>,T>                   rb(msh, cl, recdeg);
+    vector_cell_basis<cuthho_mesh<T, ET>,T>            cb(msh, cl, celdeg);
+
+    auto rbs = cell_basis<cuthho_mesh<T, ET>,T>::size(recdeg);
+    auto fbs = vector_face_basis<cuthho_mesh<T, ET>,T>::size(facdeg);
+    auto cbs = vector_cell_basis<cuthho_mesh<T, ET>,T>::size(celdeg);
+
+    const auto fcs = faces(msh, cl);
+    const auto num_faces = fcs.size();
+    const auto ns = normals(msh, cl);
+
+    matrix_type dr_lhs = matrix_type::Zero(rbs, rbs);
+    matrix_type dr_rhs = matrix_type::Zero(rbs, cbs + num_faces*fbs);
+
+
+    const auto qps = integrate(msh, cl, celdeg + recdeg - 1);
+    for (auto& qp : qps)
+    {
+        const auto s_phi  = rb.eval_basis(qp.first);
+        const auto s_dphi = rb.eval_gradients(qp.first);
+        const auto v_phi  = cb.eval_basis(qp.first);
+
+        dr_lhs += qp.second * s_phi * s_phi.transpose();
+        dr_rhs.block(0, 0, rbs, cbs) -= qp.second * s_dphi * v_phi.transpose();
+    }
+
+
+    for (size_t i = 0; i < fcs.size(); i++)
+    {
+        const auto fc     = fcs[i];
+        const auto n      = ns[i];
+        vector_face_basis<cuthho_mesh<T, ET>,T>            fb(msh, fc, facdeg);
+
+        const auto qps_f = integrate(msh, fc, facdeg + recdeg);
+        for (auto& qp : qps_f)
+        {
+            const auto s_phi = rb.eval_basis(qp.first);
+            const auto f_phi = fb.eval_basis(qp.first);
+
+            const Matrix<T, Dynamic, 2> s_phi_n = (s_phi * n.transpose());
+            dr_rhs.block(0, cbs + i * fbs, rbs, fbs) += qp.second * s_phi_n * f_phi.transpose();
+        }
+    }
+
+    
+    assert(dr_lhs.rows() == rbs && dr_lhs.cols() == rbs);
+    assert(dr_rhs.rows() == rbs && dr_rhs.cols() == cbs + num_faces * fbs);
+
+    matrix_type oper = dr_lhs.ldlt().solve(dr_rhs);
+    matrix_type data = dr_rhs;
+    // matrix_type data = dr_rhs.transpose() * oper; used in diskpp -> wierd
+
+    return std::make_pair(oper, data);
+}
+
+
+template<typename T, size_t ET, typename Function>
+std::pair<   Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>,
+             Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>  >
+make_hho_divergence_reconstruction(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl, const Function& level_set_function, const hho_degree_info& di, element_location where)
+{
+
+    if ( !is_cut(msh, cl) )
+        return make_hho_divergence_reconstruction(msh, cl, di);
+    
+
+    typedef Matrix<T, Dynamic, Dynamic> matrix_type;
+
+    const auto celdeg = di.cell_degree();
+    const auto facdeg = di.face_degree();
+    const auto recdeg = di.face_degree();
+
+    cell_basis<cuthho_mesh<T, ET>,T>                   rb(msh, cl, recdeg);
+    vector_cell_basis<cuthho_mesh<T, ET>,T>            cb(msh, cl, celdeg);
+
+    auto rbs = cell_basis<cuthho_mesh<T, ET>,T>::size(recdeg);
+    auto fbs = vector_face_basis<cuthho_mesh<T, ET>,T>::size(facdeg);
+    auto cbs = vector_cell_basis<cuthho_mesh<T, ET>,T>::size(celdeg);
+
+    const auto fcs = faces(msh, cl);
+    const auto num_faces = fcs.size();
+    const auto ns = normals(msh, cl);
+
+    matrix_type dr_lhs = matrix_type::Zero(rbs, rbs);
+    matrix_type dr_rhs = matrix_type::Zero(rbs, cbs + num_faces*fbs);
+
+
+    const auto qps = integrate(msh, cl, celdeg + recdeg - 1, where);
+    for (auto& qp : qps)
+    {
+        const auto s_phi  = rb.eval_basis(qp.first);
+        const auto s_dphi = rb.eval_gradients(qp.first);
+        const auto v_phi  = cb.eval_basis(qp.first);
+
+        dr_lhs += qp.second * s_phi * s_phi.transpose();
+        dr_rhs.block(0, 0, rbs, cbs) -= qp.second * s_dphi * v_phi.transpose();
+    }
+
+
+    for (size_t i = 0; i < fcs.size(); i++)
+    {
+        const auto fc     = fcs[i];
+        const auto n      = ns[i];
+        vector_face_basis<cuthho_mesh<T, ET>,T>            fb(msh, fc, facdeg);
+
+        const auto qps_f = integrate(msh, fc, facdeg + recdeg, where);
+        for (auto& qp : qps_f)
+        {
+            const auto s_phi = rb.eval_basis(qp.first);
+            const auto f_phi = fb.eval_basis(qp.first);
+
+            const Matrix<T, Dynamic, 2> s_phi_n = (s_phi * n.transpose());
+            dr_rhs.block(0, cbs + i * fbs, rbs, fbs) += qp.second * s_phi_n * f_phi.transpose();
+        }
+    }
+
+    
+    assert(dr_lhs.rows() == rbs && dr_lhs.cols() == rbs);
+    assert(dr_rhs.rows() == rbs && dr_rhs.cols() == cbs + num_faces * fbs);
+
+    matrix_type oper = dr_lhs.ldlt().solve(dr_rhs);
+    matrix_type data = dr_rhs;
+    // matrix_type data = dr_rhs.transpose() * oper; used in diskpp -> wierd
+
+    return std::make_pair(oper, data);
+}
+
+////////////////////   TESTS   ///////////////////////
 
 
 template<typename T, size_t ET, typename Function>
@@ -1824,7 +1967,8 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         else
         {
             auto gr = make_hho_gradrec_matrix(msh, cl, level_set_function, hdi, where);   
-            Matrix<RealType, Dynamic, Dynamic> stab = make_hho_vector_cut_stabilization(msh, cl, hdi, where);  
+            Matrix<RealType, Dynamic, Dynamic> stab = make_hho_vector_cut_stabilization(msh, cl, hdi, where);
+            auto dr = make_hho_divergence_reconstruction(msh, cl, level_set_function, hdi, where);
             Matrix<RealType, Dynamic, Dynamic> lc = gr.second + stab;
             Matrix<RealType, Dynamic, 1> f = Matrix<RealType, Dynamic, 1>::Zero(lc.rows());
             f = make_vector_rhs(msh, cl, hdi.cell_degree(), rhs_fun, where, level_set_function, bcs_fun, gr.first);
