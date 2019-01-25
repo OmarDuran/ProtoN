@@ -2082,6 +2082,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     std::vector< Matrix<RealType, 2, 1> >   solution_uT;
 
     tc.tic();
+    RealType    L2_error = 0.0;
     RealType    H1_error = 0.0;
     RealType    H1_sol_norm = 0.0;
     size_t      cell_i   = 0;
@@ -2130,6 +2131,15 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
             auto qps = integrate(msh, cl, 2*hdi.cell_degree(), element_location::IN_NEGATIVE_SIDE);
             for (auto& qp : qps)
             {
+                /* Compute L2-error */
+                auto cphi = cb.eval_basis( qp.first );
+                Matrix<RealType, 2, 1> sol_num = Matrix<RealType, 2, 1>::Zero();
+
+                sol_num += cphi.transpose() * cell_dofs;
+
+                Matrix<RealType, 2, 1> sol_diff = sol_vel(qp.first) - sol_num;
+                L2_error += qp.second * sol_diff.dot(sol_diff);
+
                 /* Compute H1-error */
                 auto d_cphi = cb.eval_gradients( qp.first );
                 Matrix<RealType, 2, 2> grad = Matrix<RealType, 2, 2>::Zero();
@@ -2149,6 +2159,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     }
 
     std::cout << bold << green << "Energy-norm absolute error:           " << std::sqrt(H1_error) << std::endl;
+    std::cout << bold << green << "L2-norm absolute error:           " << std::sqrt(L2_error) << std::endl;
 
     postoutput.add_object(uT1_gp);
     postoutput.add_object(uT2_gp);
