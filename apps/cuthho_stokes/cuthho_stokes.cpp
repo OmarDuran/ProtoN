@@ -2075,6 +2075,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
     auto uT1_gp  = std::make_shared< gnuplot_output_object<RealType> >("fictdom_uT1.dat");
     auto uT2_gp  = std::make_shared< gnuplot_output_object<RealType> >("fictdom_uT2.dat");
+    auto p_gp    = std::make_shared< gnuplot_output_object<RealType> >("fictdom_p.dat");
     
     auto int_gp  = std::make_shared< gnuplot_output_object<RealType> >("ficdom_int.dat");
 
@@ -2085,6 +2086,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     RealType    L2_error = 0.0;
     RealType    H1_error = 0.0;
     RealType    H1_sol_norm = 0.0;
+    RealType    L2_pressure_error = 0.0;
     size_t      cell_i   = 0;
     for (auto& cl : msh.cells)
     {
@@ -2092,6 +2094,8 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         if (hide_fict_dom && location(msh,cl) == element_location::IN_POSITIVE_SIDE)
             continue;
         
+        cell_basis<cuthho_poly_mesh<RealType>, RealType> s_cb(msh, cl, hdi.face_degree());
+
         vector_cell_basis<cuthho_poly_mesh<RealType>, RealType> cb(msh, cl, hdi.cell_degree());
         auto cbs = cb.size();
         
@@ -2099,6 +2103,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         auto rbs = rb.size();
         
         Matrix<RealType, Dynamic, 1> locdata = assembler.take_velocity(msh, cl, sol, bcs_fun);
+        Matrix<RealType, Dynamic, 1> loc_pressure = assembler.take_pressure(msh, cl, sol);
         Matrix<RealType, Dynamic, 1> cell_dofs = locdata.head(cbs);
         
         auto bar = barycenter(msh, cl, element_location::IN_NEGATIVE_SIDE);
@@ -2119,8 +2124,11 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
             auto c_val_bis = c_phi_bis.transpose() * cell_dofs;
 
             
+            RealType p_val = s_cb.eval_basis(tp).dot(loc_pressure);
+
             uT1_gp->add_data( tp, c_val_bis(0,0) );
             uT2_gp->add_data( tp, c_val_bis(1,0) ); 
+            p_gp->add_data( tp, p_val );
         }
 
         if ( location(msh, cl) == element_location::IN_NEGATIVE_SIDE ||
@@ -2151,6 +2159,15 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
                 
                 H1_error += qp.second * inner_product(grad_diff , grad_diff);
 
+
+                /* Compute pressure L2-error */
+                auto s_cphi = s_cb.eval_basis( qp.first );
+                RealType p_num = s_cphi.dot(loc_pressure);
+                RealType p_diff = pressure( qp.first ) - p_num;
+
+                L2_pressure_error += qp.second * p_diff * p_diff;
+
+
                 int_gp->add_data( qp.first, 1.0 );
             }
         }
@@ -2159,10 +2176,14 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     }
 
     std::cout << bold << green << "Energy-norm absolute error:           " << std::sqrt(H1_error) << std::endl;
+
     std::cout << bold << green << "L2-norm absolute error:           " << std::sqrt(L2_error) << std::endl;
+
+    std::cout << bold << green << "L2-norm pressure absolute error:           " << std::sqrt(L2_pressure_error) << std::endl;
 
     postoutput.add_object(uT1_gp);
     postoutput.add_object(uT2_gp);
+    postoutput.add_object(p_gp);
     postoutput.add_object(int_gp);
     postoutput.write();
 
