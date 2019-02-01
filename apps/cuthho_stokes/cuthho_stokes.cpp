@@ -89,6 +89,24 @@ inner_product(const Matrix<T, N, N>& b, const Matrix<T, N, N>& a)
     return a.cwiseProduct(b).sum();
 }
 
+
+
+template<typename T, int N>
+Matrix<T, Dynamic, 1>
+inner_product(const std::vector<Matrix<T, N, N>>& a, const Matrix<T, N, N>& b)
+{
+
+    //assert(b.cols() == b.rows() && b.cols() == N);
+    
+    Matrix<T, Dynamic, 1> ret(a.size(), 1);
+    for (size_t i = 0; i < a.size(); i++)
+    {
+        ret[i]        = inner_product(a[i],b);
+    }
+    return ret;
+}
+
+
 /////////////////////////  LEVEL -- SETS  ///////////////////////////////
 
 template<typename T>
@@ -1125,17 +1143,40 @@ make_hho_divergence_reconstruction(const cuthho_mesh<T, ET>& msh, const typename
     matrix_type dr_rhs = matrix_type::Zero(rbs, cbs + num_faces*fbs);
 
 
+    // Matrix<T, Dynamic, Dynamic> Ic = Matrix<T, Dynamic, Dynamic>::Identity(cbs, cbs);
+    Matrix<T, 2, 2> Ic = Matrix<T, 2, 2>::Zero();
+    Ic(0,0) = 1.0;    Ic(1,1) = 1.0;
+    
     const auto qps = integrate(msh, cl, celdeg + recdeg - 1, where);
     for (auto& qp : qps)
     {
         const auto s_phi  = rb.eval_basis(qp.first);
         const auto s_dphi = rb.eval_gradients(qp.first);
         const auto v_phi  = cb.eval_basis(qp.first);
+        const auto dv_phi = cb.eval_gradients(qp.first);
 
         dr_lhs += qp.second * s_phi * s_phi.transpose();
-        dr_rhs.block(0, 0, rbs, cbs) -= qp.second * s_dphi * v_phi.transpose();
+        // dr_rhs.block(0, 0, rbs, cbs) -= qp.second * s_dphi * v_phi.transpose();
+
+        Matrix<T, Dynamic, 1> div = inner_product(dv_phi, Ic);
+        
+        dr_rhs.block(0, 0, rbs, cbs) += qp.second * s_phi * div.transpose();
     }
 
+
+    auto iqp = integrate_interface(msh, cl, celdeg + recdeg, element_location::IN_NEGATIVE_SIDE);
+    for (auto& qp : iqp)
+    {
+        const auto v_phi = cb.eval_basis(qp.first);
+        const auto s_phi = rb.eval_basis(qp.first);
+        const auto n = level_set_function.normal(qp.first);
+
+        const Matrix<T, Dynamic, 2> s_phi_n = (s_phi * n.transpose());
+        
+        // dr_rhs.block(0, 0, rbs, cbs) += qp.second * s_phi_n * v_phi.transpose();
+    }
+    
+    
 
     for (size_t i = 0; i < fcs.size(); i++)
     {
@@ -1143,14 +1184,16 @@ make_hho_divergence_reconstruction(const cuthho_mesh<T, ET>& msh, const typename
         const auto n      = ns[i];
         vector_face_basis<cuthho_mesh<T, ET>,T>            fb(msh, fc, facdeg);
 
-        const auto qps_f = integrate(msh, fc, facdeg + recdeg, where);
+        const auto qps_f = integrate(msh, fc, celdeg + recdeg, where);
         for (auto& qp : qps_f)
         {
+            const auto v_phi = cb.eval_basis(qp.first);
             const auto s_phi = rb.eval_basis(qp.first);
             const auto f_phi = fb.eval_basis(qp.first);
 
             const Matrix<T, Dynamic, 2> s_phi_n = (s_phi * n.transpose());
-            dr_rhs.block(0, cbs + i * fbs, rbs, fbs) += qp.second * s_phi_n * f_phi.transpose();
+            // dr_rhs.block(0, cbs + i * fbs, rbs, fbs) += qp.second * s_phi_n * f_phi.transpose();
+            // dr_rhs.block(0, 0, rbs, cbs) += qp.second * s_phi_n * v_phi.transpose();
         }
     }
 
@@ -2049,66 +2092,14 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
             else
                 f.block(0, 0, cbs, 1) = make_vector_rhs(msh, cl, hdi.cell_degree(), rhs_fun, where, level_set_function, bcs_fun, gr.first);
             
-            Matrix<RealType, Dynamic, 1> p_rhs = make_pressure_rhs(msh, cl, hdi.face_degree(), where, level_set_function, bcs_fun);
+            // Matrix<RealType, Dynamic, 1> p_rhs = make_pressure_rhs(msh, cl, hdi.face_degree(), where, level_set_function, bcs_fun);
 
-            
-            // static condensation
+
+            Matrix<RealType, Dynamic, 1> p_rhs = Matrix<RealType, Dynamic, 1>::Zero(cbs_B);
 
             if( sc )
             {
-                auto mat_sc = stokes_static_condensation_compute(msh, cl, hdi, lc, dr.second, f, p_rhs);
-
-                
-                size_t num_faces = faces(msh, cl).size();
-                RealType f_dofs = num_faces * fbs;
-
-                Matrix<RealType, Dynamic, 1> p_rec_lhs= Matrix<RealType, Dynamic, 1>::Zero(f_dofs);
-                RealType p_rec_rhs = 0;
-
-                cell_basis<cuthho_poly_mesh<RealType>, RealType> cb(msh, cl, hdi.face_degree());
-                
-                auto qps = integrate(msh, cl, hdi.face_degree(), element_location::IN_NEGATIVE_SIDE );
-
-                Matrix<RealType, Dynamic, 1> vect_phi= Matrix<RealType, Dynamic, 1>::Zero(cbs_B-1);
-                for (auto& qp : qps)
-                {
-                    auto phi = cb.eval_basis(qp.first);
-                    vect_phi += phi.tail(cbs_B-1);
-                }
-
-                for(size_t i = 0; i < f_dofs; i++)
-                {
-                    Matrix<RealType, Dynamic, 1> p_rec=Matrix<RealType, Dynamic, 1>::Zero(cbs_B-1);
-
-                    // lhs
-                    Matrix<RealType, Dynamic, 1> sol_F= Matrix<RealType, Dynamic, 1>::Zero(f_dofs);
-                    sol_F(i) = 1.0;
-
-                    Matrix<RealType, Dynamic, 1> cell_rhs= Matrix<RealType, Dynamic, 1>::Zero(cbs);
-                    Matrix<RealType, Dynamic, 1> B_rhs= Matrix<RealType, Dynamic, 1>::Zero(cbs_B);
-                    
-                    p_rec = stokes_static_condensation_recover(msh, cl, hdi, lc, dr.second, cell_rhs, B_rhs, sol_F, 0.0).tail(cbs_B-1);
-                    
-                    p_rec_lhs(i) = p_rec.dot(vect_phi);
-                    
-                    // rhs
-                    sol_F(i) = 0.0;
-                    cell_rhs = f.head(cbs);
-                    B_rhs.tail(cbs_B-1) = p_rhs.tail(cbs_B-1);
-
-                    p_rec = stokes_static_condensation_recover(msh, cl, hdi, lc, dr.second, cell_rhs, B_rhs, sol_F, 0.0).tail(cbs_B-1);
-
-                    p_rec_rhs += p_rec.dot(vect_phi);
-                }
-                
-                    
-                
-                // std::cout << "start assemble" << std::endl;
-                assembler_sc.assemble(msh, cl, mat_sc.first.block(0, 0, f_dofs, f_dofs),
-                                   mat_sc.first.block(f_dofs, 0, 1, f_dofs), p_rec_lhs, p_rec_rhs,
-                                   mat_sc.second.head(f_dofs), mat_sc.second.tail(1),
-                                   bcs_fun, where);
-                // std::cout << "end assemble" << std::endl;
+                assembler_sc.assemble(msh, cl, lc, dr.second, f, p_rhs, bcs_fun, where);
             }
             else 
                 assembler.assemble(msh, cl, lc, dr.second, f, p_rhs, bcs_fun, where);
@@ -2116,11 +2107,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     }
 
     if( sc )
-    {
-        std::cout << "finalize" << std::endl;
         assembler_sc.finalize();
-        std::cout << "end finalize" << std::endl;
-    }
     else 
         assembler.finalize();
 
@@ -2134,19 +2121,6 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     std::cout << "Cells: " << msh.cells.size() << std::endl;
     std::cout << "Faces: " << msh.faces.size() << std::endl;
 
-    ///////////////   TESTS    ////////////////
-    // for(size_t i=0; i < assembler_sc.LHS.rows(); i++)
-    // {
-    //     for(size_t j=0; j < assembler_sc.LHS.rows(); j++)
-    //     {
-    //         std::cout << assembler_sc.LHS(i,j) << "  ";
-    //     }
-    //     std::cout << std::endl;
-    //     std::cout << std::endl;
-    // }
-    /////////////   END TESTS    //////////////
-    
-
     /************** SOLVE **************/
     tc.tic();
 #if 1
@@ -2155,13 +2129,9 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     Matrix<RealType, Dynamic, 1> sol;
         
     if( sc ) {
-        // std::cout << "test 1" << std::endl;
         solver.analyzePattern(assembler_sc.LHS);
-        // std::cout << "test 2" << std::endl;
         solver.factorize(assembler_sc.LHS);
-        // std::cout << "test 3" << std::endl;
         sol = solver.solve(assembler_sc.RHS);
-        // std::cout << "test 4" << std::endl;
     }
     else
     {
@@ -2209,6 +2179,11 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     
     auto int_gp  = std::make_shared< gnuplot_output_object<RealType> >("ficdom_int.dat");
 
+
+    auto tests_p_gp = std::make_shared< gnuplot_output_object<RealType> >("test_p.dat");
+
+
+    RealType mean_pressure = 0.0;
     
     std::vector< Matrix<RealType, 2, 1> >   solution_uT;
 
@@ -2240,10 +2215,13 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         {
             locdata_vel = assembler_sc.take_velocity(msh, cl, sol, bcs_fun);
 
-            RealType mean_pressure = assembler_sc.take_pressure(msh, cl, sol);
+            RealType pressure_zero = assembler_sc.take_pressure(msh, cl, sol);
 
-
-
+            auto bar = barycenter(msh, cl, element_location::IN_NEGATIVE_SIDE);
+            
+            tests_p_gp->add_data( bar, pressure_zero );
+            
+            
             auto gr = make_hho_gradrec_matrix(msh, cl, level_set_function, hdi, where);   
             Matrix<RealType, Dynamic, Dynamic> stab = make_hho_vector_cut_stabilization(msh, cl, hdi, where);
             auto dr = make_hho_divergence_reconstruction(msh, cl, level_set_function, hdi, where);
@@ -2263,10 +2241,10 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
             
             Matrix<RealType, Dynamic, 1> sol_rec
                 = stokes_static_condensation_recover(msh, cl, hdi, lc, dr.second, cell_rhs,
-                                                     p_rhs, locdata_vel, mean_pressure);
+                                                     p_rhs, locdata_vel, pressure_zero);
                 
             loc_pressure = sol_rec.tail(cbs_B);
-            // loc_pressure[0] = mean_pressure;
+            // loc_pressure[0] = pressure_zero;
             
             cell_dofs = sol_rec.head(cbs);
         }
@@ -2339,7 +2317,12 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
                 L2_pressure_error += qp.second * p_diff * p_diff;
 
 
+                /* mean pressure */
+                mean_pressure += qp.second * p_num;
+
+                
                 int_gp->add_data( qp.first, 1.0 );
+
             }
         }
 
@@ -2352,10 +2335,13 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
     std::cout << bold << green << "L2-norm pressure absolute error:           " << std::sqrt(L2_pressure_error) << std::endl;
 
+    std::cout << bold << blue << "mean pressure :           " << mean_pressure << std::endl;
+
     postoutput.add_object(uT1_gp);
     postoutput.add_object(uT2_gp);
     postoutput.add_object(p_gp);
     postoutput.add_object(int_gp);
+    if( sc ) postoutput.add_object(tests_p_gp); 
     postoutput.write();
 
     tc.toc();
@@ -3056,15 +3042,6 @@ public:
     
     void finalize(void)
     {
-        // TESTS //
-        // std::cout << "triplets :" << std::endl;
-        // for(size_t i = 0; i < triplets.size(); i++)
-        // {
-        //     std::cout << "(" << triplets[i].row() << "," << triplets[i].col() << ")"
-        //               << " : " << triplets[i].value() << std::endl;
-        // }
-        // end tests //
-
         LHS.setFromTriplets( triplets.begin(), triplets.end() );
         triplets.clear();
     }
@@ -3176,18 +3153,31 @@ public:
     void
     assemble(const Mesh& msh, const typename Mesh::cell_type& cl,
              const Matrix<T, Dynamic, Dynamic>& lhs_A, const Matrix<T, Dynamic, Dynamic>& lhs_B,
-             const Matrix<T, Dynamic, 1>& p_rec_lhs, const T& p_rec_rhs,
              const Matrix<T, Dynamic, 1>& rhs_A, const Matrix<T, Dynamic, 1>& rhs_B,
              const Function& dirichlet_bf, const element_location where)
     {
         auto facdeg = di.face_degree();
+        auto celdeg = di.cell_degree();
 
+        auto cbs_A = vector_cell_basis<Mesh,T>::size(celdeg);
         auto cbs_B = cell_basis<Mesh,T>::size(facdeg);
         auto fbs_A = vector_face_basis<Mesh,T>::size(facdeg);
 
         auto fcs = faces(msh, cl);
         auto num_faces = fcs.size();
+        size_t f_dofs = num_faces * fbs_A;
+        
+        // static condensation
+        auto mat_sc = stokes_static_condensation_compute(msh, cl, di, lhs_A, lhs_B, rhs_A, rhs_B);
 
+        // condensed matrices and rhs
+        Matrix<T, Dynamic, Dynamic> lhs_A_sc = mat_sc.first.block(0, 0, f_dofs, f_dofs);
+        Matrix<T, Dynamic, Dynamic> lhs_B_sc = mat_sc.first.block(f_dofs, 0, 1, f_dofs);
+        Matrix<T, Dynamic, 1> rhs_A_sc = mat_sc.second.head(f_dofs);
+        Matrix<T, Dynamic, 1> rhs_B_sc = mat_sc.second.tail(1);
+
+
+        
         std::vector<assembly_index> asm_map;
         asm_map.reserve(num_faces*fbs_A); 
 
@@ -3217,73 +3207,86 @@ public:
             }
         }
         
-        assert( asm_map.size() == lhs_A.rows() && asm_map.size() == lhs_A.cols() );
+        assert( asm_map.size() == lhs_A_sc.rows() && asm_map.size() == lhs_A_sc.cols() );
         
-        for (size_t i = 0; i < lhs_A.rows(); i++)
+        for (size_t i = 0; i < lhs_A_sc.rows(); i++)
         {
             if (!asm_map[i].assemble())
                 continue;
 
-            for (size_t j = 0; j < lhs_A.cols(); j++)
+            for (size_t j = 0; j < lhs_A_sc.cols(); j++)
             {   
                 if ( asm_map[j].assemble() )
-                    triplets.push_back( Triplet<T>(asm_map[i], asm_map[j], lhs_A(i,j)) );
+                    triplets.push_back( Triplet<T>(asm_map[i], asm_map[j], lhs_A_sc(i,j)) );
                 else
-                    RHS(asm_map[i]) -= lhs_A(i,j) * dirichlet_data(j);
+                    RHS(asm_map[i]) -= lhs_A_sc(i,j) * dirichlet_data(j);
             }
         }
 
-        assert( lhs_B.rows() == 1 && lhs_B.cols() == num_faces * fbs_A);
+        assert( lhs_B_sc.rows() == 1 && lhs_B_sc.cols() == num_faces * fbs_A);
         
-        for (size_t i = 0; i < lhs_B.rows(); i++)
+        for (size_t i = 0; i < lhs_B_sc.rows(); i++)
         {
-            for (size_t j = 0; j < lhs_B.cols(); j++)
+            for (size_t j = 0; j < lhs_B_sc.cols(); j++)
             {
                 auto global_i = B_offset + i;
                 auto global_j = asm_map[j];
                 if ( asm_map[j].assemble() )
                 {
-                    triplets.push_back( Triplet<T>(global_i, global_j, lhs_B(i,j)) );
-                    triplets.push_back( Triplet<T>(global_j, global_i, lhs_B(i,j)) );
+                    triplets.push_back( Triplet<T>(global_i, global_j, lhs_B_sc(i,j)) );
+                    triplets.push_back( Triplet<T>(global_j, global_i, lhs_B_sc(i,j)) );
                 }
                 else
-                    RHS(global_i) -= lhs_B(i,j)*dirichlet_data(j);
+                    RHS(global_i) -= lhs_B_sc(i,j)*dirichlet_data(j);
             }
         }
 
-        // null pressure mean condition
-        // cell_basis<cuthho_poly_mesh<T>, T> cb(msh, cl, di.face_degree());
-        // auto qpsi = integrate(msh, cl, di.face_degree(), where);
-        // Matrix<T, Dynamic, 1> mult = Matrix<T, Dynamic, 1>::Zero( cbs_B );
-        // for (auto& qp : qpsi)
-        // {
-        //     auto phi = cb.eval_basis(qp.first);
-        //     mult += qp.second * phi;
-        // }
-        // auto mult_offset = fbs_A * num_other_faces + msh.cells.size();
-
-
-        // std::cout << "TEST "    << std::endl;
+        /////////////////////////
+        // null mean pressure condition
+        /////////////////////////
         
-        // for (size_t i = 0; i < mult.rows(); i++)
-        // {
-        //     triplets.push_back( Triplet<T>(B_offset+i, mult_offset, mult(i)) );
-        //     triplets.push_back( Triplet<T>(mult_offset, B_offset+i, mult(i)) );
+        Matrix<T, Dynamic, 1> p_rec_lhs = Matrix<T, Dynamic, 1>::Zero(f_dofs);
+        T p_rec_rhs = 0;
 
-        //     std::cout << "offset  : " << B_offset+i
-        //               << "        "      << mult_offset
-        //               << std::endl;
+        cell_basis<cuthho_poly_mesh<T>, T> cb(msh, cl, facdeg);
+
         
-        // }
-
-        cell_basis<cuthho_poly_mesh<T>, T> cb(msh, cl, 0);
-        auto qpsi = integrate(msh, cl, 0, where);
         Matrix<T, Dynamic, 1> mult = Matrix<T, Dynamic, 1>::Zero( 1 );
-        for (auto& qp : qpsi)
+        Matrix<T, Dynamic, 1> vect_phi= Matrix<T, Dynamic, 1>::Zero(cbs_B-1);
+        
+        auto qps = integrate(msh, cl, facdeg, where );
+        for (auto& qp : qps)
         {
             auto phi = cb.eval_basis(qp.first);
-            mult += qp.second * phi;
+            mult += qp.second * phi.head(1);
+            vect_phi += phi.tail(cbs_B-1);
         }
+
+        for(size_t i = 0; i < f_dofs; i++)
+        {
+            Matrix<T, Dynamic, 1> p_rec=Matrix<T, Dynamic, 1>::Zero(cbs_B-1);
+
+            // lhs
+            Matrix<T, Dynamic, 1> sol_F= Matrix<T, Dynamic, 1>::Zero(f_dofs);
+            sol_F(i) = 1.0;
+
+            Matrix<T, Dynamic, 1> cell_rhs= Matrix<T, Dynamic, 1>::Zero(cbs_A);
+            Matrix<T, Dynamic, 1> B_rhs= Matrix<T, Dynamic, 1>::Zero(cbs_B);
+                    
+            p_rec = stokes_static_condensation_recover(msh, cl, di, lhs_A, lhs_B, cell_rhs, B_rhs, sol_F, 0.0).tail(cbs_B-1);
+                    
+            p_rec_lhs(i) = p_rec.dot(vect_phi);
+                    
+            // rhs
+            sol_F(i) = 0.0;
+            cell_rhs = rhs_A.head(cbs_A);
+            B_rhs.tail(cbs_B-1) = rhs_B.tail(cbs_B-1);
+
+            p_rec = stokes_static_condensation_recover(msh, cl, di, lhs_A, lhs_B, cell_rhs, B_rhs, sol_F, 0.0).tail(cbs_B-1);
+
+            p_rec_rhs += p_rec.dot(vect_phi);
+        }
+                
         auto mult_offset = fbs_A * num_other_faces + msh.cells.size();
 
         triplets.push_back( Triplet<T>(B_offset, mult_offset, mult(0)) );
@@ -3301,22 +3304,20 @@ public:
         }
         
         RHS(mult_offset) -= p_rec_rhs;
-        
-        // std::cout << "offset max : " << B_offset+mult.rows()-1
-        //           << "        "      << mult_offset
-        //           << std::endl;
-        
+
+        ////////////////////////
         // handling of rhs terms
+        ////////////////////////
         for (size_t face_i = 0; face_i < num_faces; face_i++)
         {
             auto fc = fcs[face_i];
             auto face_offset = offset(msh, fc);
             auto face_LHS_offset = compress_table.at(face_offset)*fbs_A;
             
-            RHS.block(face_LHS_offset, 0, fbs_A, 1) += rhs_A.block(face_i*fbs_A, 0, fbs_A, 1);
+            RHS.block(face_LHS_offset, 0, fbs_A, 1) += rhs_A_sc.block(face_i*fbs_A, 0, fbs_A, 1);
         }
         // pressure rhs
-        RHS.block(B_offset, 0, 1, 1) += rhs_B.block(0, 0, 1, 1);
+        RHS.block(B_offset, 0, 1, 1) += rhs_B_sc.block(0, 0, 1, 1);
         
     } // assemble()
 
@@ -3375,15 +3376,6 @@ public:
     
     void finalize(void)
     {
-        // TESTS //
-        // std::cout << "triplets :" << std::endl;
-        // for(size_t i = 0; i < triplets.size(); i++)
-        // {
-        //     std::cout << "(" << triplets[i].row() << "," << triplets[i].col() << ")"
-        //               << " : " << triplets[i].value() << std::endl;
-        // }
-        // end tests //
-     
         LHS.setFromTriplets( triplets.begin(), triplets.end() );
         triplets.clear();
     }
