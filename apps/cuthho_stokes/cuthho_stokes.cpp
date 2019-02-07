@@ -1980,7 +1980,111 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 {
     using RealType = typename Mesh::coordinate_type;
 
+
+    
+    /************** OPEN SILO DATABASE **************/
+    silo_database silo;
+    silo.create("cuthho_stokes.silo");
+    silo.add_mesh(msh, "mesh");
+
+    /************** MAKE A SILO VARIABLE FOR CELL POSITIONING **************/
+    std::vector<RealType> cut_cell_markers;
+    for (auto& cl : msh.cells)
+    {
+        if ( location(msh, cl) == element_location::IN_POSITIVE_SIDE )
+            cut_cell_markers.push_back(1.0);
+        else if ( location(msh, cl) == element_location::IN_NEGATIVE_SIDE )
+            cut_cell_markers.push_back(-1.0);
+        else if ( location(msh, cl) == element_location::ON_INTERFACE )
+            cut_cell_markers.push_back(0.0);
+        else
+            throw std::logic_error("shouldn't have arrived here...");
+    }
+    silo.add_variable("mesh", "cut_cells", cut_cell_markers.data(), cut_cell_markers.size(), zonal_variable_t);
+
+    /************** MAKE A SILO VARIABLE FOR LEVEL SET FUNCTION **************/
+    std::vector<RealType> level_set_vals;
+    for (auto& pt : msh.points)
+        level_set_vals.push_back( level_set_function(pt) );
+    silo.add_variable("mesh", "level_set", level_set_vals.data(), level_set_vals.size(), nodal_variable_t);
+
+    /************** MAKE A SILO VARIABLE FOR NODE POSITIONING **************/
+    std::vector<RealType> node_pos;
+    for (auto& n : msh.nodes)
+        node_pos.push_back( location(msh, n) == element_location::IN_POSITIVE_SIDE ? +1.0 : -1.0 );
+    silo.add_variable("mesh", "node_pos", node_pos.data(), node_pos.size(), nodal_variable_t);
+
+    
     /************** DEFINE PROBLEM RHS, SOLUTION AND BCS **************/
+#if 1  // null velocity on the boundary
+    auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        Matrix<RealType, 2, 1> ret;
+
+        RealType x1 = pt.x() - 0.5;
+        RealType x2 = x1 * x1;
+        RealType y1 = pt.y() - 0.5;
+        RealType y2 = y1 * y1;
+
+        RealType r = sqrt(x2 + y2);
+        
+        RealType A = 32 - 18.0 / (3.0 * r);
+        
+        ret(0) = A * y1 + 5.* x2 * x2;
+        ret(1) = - A * x1 + 5.* y2 * y2;
+
+        return ret;
+    };
+
+    auto sol_vel = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        Matrix<RealType, 2, 1> ret;
+
+        RealType x1 = pt.x() - 0.5;
+        RealType x2 = x1 * x1;
+        RealType y1 = pt.y() - 0.5;
+        RealType y2 = y1 * y1;
+
+        RealType r = sqrt(x2 + y2);
+        
+        RealType B = 2. * (1./3. - r) * ( 1./3. - 2.*r);
+        
+        ret(0) =  - B * y1;
+        ret(1) = B * x1;
+
+        return ret;
+    };
+
+    auto sol_grad = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        Matrix<RealType, 2, 2> ret;
+
+        RealType x1 = pt.x() - 0.5;
+        RealType x2 = x1 * x1;
+        RealType y1 = pt.y() - 0.5;
+        RealType y2 = y1 * y1;
+
+        
+        RealType r = sqrt(x2 + y2);
+        
+        RealType B = 2. * (1./3. - r) * ( 1./3. - 2.*r);
+        RealType C = 8.0 - 6.0 / (3.0 * r);
+
+        
+        
+        ret(0,0) = - C * x1 * y1;
+        ret(0,1) = - B - C * y2;
+        ret(1,0) = B + C * x2;
+        ret(1,1) = C * x1 * y1;
+        
+        return ret;
+    };
+
+    auto bcs_fun = [&](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        return sol_vel(pt);
+    };
+
+    auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
+        return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - 0.5, 5.);
+    };
+#elif 0  // non null velocity on the boundary
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
 
@@ -2040,8 +2144,8 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
     auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
         return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - 0.5, 5.);
-    };
-
+    };    
+#endif
 
     timecounter tc;
 
@@ -2092,10 +2196,40 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
             else
                 f.block(0, 0, cbs, 1) = make_vector_rhs(msh, cl, hdi.cell_degree(), rhs_fun, where, level_set_function, bcs_fun, gr.first);
             
-            // Matrix<RealType, Dynamic, 1> p_rhs = make_pressure_rhs(msh, cl, hdi.face_degree(), where, level_set_function, bcs_fun);
+            Matrix<RealType, Dynamic, 1> p_rhs = make_pressure_rhs(msh, cl, hdi.face_degree(), where, level_set_function, bcs_fun);
 
 
-            Matrix<RealType, Dynamic, 1> p_rhs = Matrix<RealType, Dynamic, 1>::Zero(cbs_B);
+
+
+            ////////////////   TEST   //////////////////
+            // if( location(msh,cl) == element_location::ON_INTERFACE )
+            // {
+            //     cell_basis<cuthho_poly_mesh<RealType>, RealType> s_cb(msh, cl, facdeg);
+            
+            //     vector_cell_basis<cuthho_poly_mesh<RealType>, RealType> cb(msh, cl, celdeg);
+
+
+            //     auto fcs = faces(msh, cl);
+            //     auto num_faces = fcs.size();
+
+            //     size_t P_offset = cbs + num_faces * fbs;
+            
+            //     auto iqp = integrate_interface(msh, cl, celdeg + facdeg, element_location::IN_NEGATIVE_SIDE);
+            //     for( auto& qp : iqp )
+            //     {
+            //         const auto v_phi = cb.eval_basis(qp.first);
+            //         const auto s_phi = s_cb.eval_basis(qp.first);
+            //         const auto n = level_set_function.normal(qp.first);
+                
+            //         const Matrix<RealType, Dynamic, 2> s_phi_n = (s_phi * n.transpose());
+                
+            //         lc.block(0, P_offset, cbs, cbs_B) += qp.second * v_phi * s_phi_n.transpose();
+            //     }
+            // }
+            /////////////   END  TEST   ////////////////
+            
+
+            // Matrix<RealType, Dynamic, 1> p_rhs = Matrix<RealType, Dynamic, 1>::Zero(cbs_B);
 
             if( sc )
             {
@@ -2169,6 +2303,8 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
     /************** POSTPROCESS **************/
 
+
+    // std::vector<RealType>   mesh;
 
 
     postprocess_output<RealType>  postoutput;
@@ -3845,7 +3981,47 @@ output_mesh_info(const Mesh& msh, const Function& level_set_function)
     }
     silo.add_variable("mesh", "agglo_set", cell_set.data(), cell_set.size(), zonal_variable_t);
 
+    
     silo.close();
+
+    
+    /*************  MAKE AN OUTPUT FOR THE INTERSECTION POINTS *************/
+    std::vector<RealType> int_pts_x;
+    std::vector<RealType> int_pts_y;
+    
+    for (auto& fc : msh.faces)
+    {
+        if( fc.user_data.location != element_location::ON_INTERFACE ) continue;
+
+        RealType x = fc.user_data.intersection_point.x();
+        RealType y = fc.user_data.intersection_point.y();
+        
+        int_pts_x.push_back(x);
+        int_pts_y.push_back(y);
+        
+    }
+    
+    
+    std::ofstream points_file("int_points.3D", std::ios::out | std::ios::trunc); 
+ 
+
+    if(points_file) 
+    {       
+        // instructions
+        points_file << "X   Y   Z   val" << std::endl;
+
+        for( size_t i = 0; i<int_pts_x.size(); i++)
+        {
+            points_file << int_pts_x[i] << "   " <<  int_pts_y[i]
+                        << "   0.0     0.0" << std::endl;
+        }
+            
+        points_file.close(); 
+    }
+
+    else 
+        std::cerr << "Points_file has not been opened" << std::endl;
+
 }
 
 
