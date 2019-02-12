@@ -1201,8 +1201,9 @@ make_hho_divergence_reconstruction(const cuthho_mesh<T, ET>& msh, const typename
     assert(dr_lhs.rows() == rbs && dr_lhs.cols() == rbs);
     assert(dr_rhs.rows() == rbs && dr_rhs.cols() == cbs + num_faces * fbs);
 
-    matrix_type oper = dr_lhs.ldlt().solve(dr_rhs);
     matrix_type data = dr_rhs;
+    matrix_type oper = dr_lhs.ldlt().solve(dr_rhs);
+    
     // matrix_type data = dr_rhs.transpose() * oper; used in diskpp -> wierd
 
     return std::make_pair(oper, data);
@@ -1479,11 +1480,12 @@ make_hho_vector_naive_stabilization(const Mesh& msh, const typename Mesh::cell_t
 
 
 
-template<typename T, size_t ET>
+template<typename T, size_t ET, typename Function>
 Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>
 make_hho_vector_cut_stabilization(const cuthho_mesh<T, ET>& msh,
                            const typename cuthho_mesh<T, ET>::cell_type& cl,
                            const hho_degree_info& di, element_location where,
+                                  const Function& level_set_function,
                            const params<T>& parms = params<T>())
 {
     if ( !is_cut(msh, cl) )
@@ -1540,8 +1542,15 @@ make_hho_vector_cut_stabilization(const cuthho_mesh<T, ET>& msh,
     for (auto& qp : iqps)
     {
         const auto c_phi  = cb.eval_basis(qp.first);
+        const auto d_phi  = cb.eval_gradients(qp.first);
+        
+        const Matrix<T,2,1> n      = level_set_function.normal(qp.first);
+        
+        const Matrix<T, Dynamic, Dynamic> d_phi_n = outer_product(d_phi, n);
         
         data.block(0, 0, cbs, cbs) += qp.second * c_phi * c_phi.transpose() * parms.eta / hT;
+        data.block(0, 0, cbs, cbs) -= qp.second * d_phi_n * c_phi.transpose();
+        data.block(0, 0, cbs, cbs) -= qp.second * c_phi * d_phi_n.transpose();
     }
     
     return data;
@@ -1717,9 +1726,10 @@ make_vector_rhs(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>
             auto n = level_set_function.normal(qp.first);
             const auto g_phi  = gb.eval_basis(qp.first);
 
+            const Matrix<T, Dynamic, Dynamic> dphi_n = outer_product(dphi, n);
             
             ret.block(0, 0, cbs, 1)
-                += qp.second  * cell_eta(msh, cl)/hT * phi * bcs(qp.first);
+                += qp.second  * ( cell_eta(msh, cl)/hT * phi - dphi_n ) * bcs(qp.first);
             
             source_vect += qp.second * outer_product(g_phi, n) * bcs(qp.first);
         }
@@ -2149,7 +2159,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
 
-        RealType mid_y = (0. + 0.96) / 2.;
+        RealType mid_y = (0. + 1.0) / 2.;
         
         RealType x1 = pt.x() - 0.5;
         RealType x2 = x1 * x1;
@@ -2174,7 +2184,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     auto sol_vel = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
 
-        RealType mid_y = (0. + 0.96) / 2.;
+        RealType mid_y = (0. + 1.0) / 2.;
         
         RealType x1 = pt.x() - 0.5;
         RealType x2 = x1 * x1;
@@ -2190,7 +2200,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     auto sol_grad = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 2> ret;
 
-        RealType mid_y = (0. + 0.96) / 2.;
+        RealType mid_y = (0. + 1.0) / 2.;
         
         RealType x1 = pt.x() - 0.5;
         RealType x2 = x1 * x1;
@@ -2211,7 +2221,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
     auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
 
-        RealType mid_y = (0. + 0.96) / 2.;
+        RealType mid_y = (0. + 1.0) / 2.;
         
         return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - mid_y, 5.);
     };
@@ -2256,7 +2266,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         else
         {
             auto gr = make_hho_gradrec_matrix(msh, cl, level_set_function, hdi, where);   
-            Matrix<RealType, Dynamic, Dynamic> stab = make_hho_vector_cut_stabilization(msh, cl, hdi, where);
+            Matrix<RealType, Dynamic, Dynamic> stab = make_hho_vector_cut_stabilization(msh, cl, hdi, where, level_set_function);
             auto dr = make_hho_divergence_reconstruction(msh, cl, level_set_function, hdi, where);
             Matrix<RealType, Dynamic, Dynamic> lc = gr.second + stab;
             Matrix<RealType, Dynamic, 1> f = Matrix<RealType, Dynamic, 1>::Zero(lc.rows());
@@ -2433,7 +2443,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
             
             
             auto gr = make_hho_gradrec_matrix(msh, cl, level_set_function, hdi, where);   
-            Matrix<RealType, Dynamic, Dynamic> stab = make_hho_vector_cut_stabilization(msh, cl, hdi, where);
+            Matrix<RealType, Dynamic, Dynamic> stab = make_hho_vector_cut_stabilization(msh, cl, hdi, where, level_set_function);
             auto dr = make_hho_divergence_reconstruction(msh, cl, level_set_function, hdi, where);
             Matrix<RealType, Dynamic, Dynamic> lc = gr.second + stab;
             Matrix<RealType, Dynamic, 1> f = Matrix<RealType, Dynamic, 1>::Zero(lc.rows());
@@ -4831,7 +4841,7 @@ int main(int argc, char **argv)
     /************** LEVEL SET FUNCTION **************/
     RealType radius = 1.0/3.0;
     // auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
-    auto level_set_function = line_level_set<RealType>(0.96);
+    auto level_set_function = line_level_set<RealType>(1.0);
     /************** DO cutHHO MESH PROCESSING **************/
 
     tc.tic();
