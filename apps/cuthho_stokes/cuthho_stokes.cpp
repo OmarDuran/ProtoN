@@ -180,6 +180,77 @@ struct line_level_set
 };
 
 
+template<typename T>
+struct carre_level_set
+{
+    T y_top, y_bot, x_left, x_right;
+
+    carre_level_set(T yt, T yb, T xl, T xr)
+        : y_top(yt), y_bot(yb), x_left(xl), x_right(xr)
+    {}
+
+    T operator()(const point<T,2>& pt) const
+    {
+        auto x = pt.x();
+        auto y = pt.y();
+
+        T in = 1;
+        if(x > x_left && x < x_right && y > y_bot && y < y_top)
+            in = 1;
+        else
+            in = -1;
+
+        T dist_x = std::min( abs(x-x_left), abs(x-x_right));
+        T dist_y = std::min( abs(y-y_bot), abs(y-y_top));
+
+        
+        return - in * std::min(dist_x , dist_y);
+    }
+
+    Eigen::Matrix<T,2,1> gradient(const point<T,2>& pt) const
+    {
+        Eigen::Matrix<T,2,1> ret;
+        
+
+        auto x = pt.x();
+        auto y = pt.y();
+
+        T dist = abs(x - x_left);
+        ret(0) = -1;
+        ret(1) = 0;
+        
+        if(abs(x - x_right) < dist )
+        {
+            dist = abs(x - x_right);
+            ret(0) = 1;
+            ret(1) = 0;
+        }
+        if(abs(y - y_bot) < dist )
+        {
+            dist = abs(y - y_bot);
+            ret(0) = 0;
+            ret(1) = -1;
+        }
+        if(abs(y - y_top) < dist)
+        {
+            ret(0) = 0;
+            ret(1) = 1;
+        }
+        
+        return ret;
+    }
+
+    Eigen::Matrix<T,2,1> normal(const point<T,2>& pt) const
+    {
+        Eigen::Matrix<T,2,1> ret;
+
+        ret = gradient(pt);
+        return ret/ret.norm();        
+    }
+
+};
+
+
 /*****************************************************************************
  *   Test stuff
  *****************************************************************************/
@@ -2155,7 +2226,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
         return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - 0.5, 5.);
     };
-#elif 1  // test on a rectangle -> adapt the level-set
+#elif 0  // test on a rectangle -> adapt the level-set
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
 
@@ -2211,6 +2282,93 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         ret(0,1) = x2 * ( x2 - 2. * x1 + 1.) * (12. * y2 - 12. * y1 + 2.);
         ret(1,0) = - y2 * ( y2 - 2. * y1 + 1.) * (12. * x2 - 12. * x1 + 2.);
         ret(1,1) = - ret(0,0);
+        
+        return ret;
+    };
+
+    auto bcs_fun = [&](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        return sol_vel(pt);
+    };
+
+    auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
+
+        RealType mid_y = (0. + 1.0) / 2.;
+        
+        return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - mid_y, 5.);
+    };
+    #elif 1  // test on an immersed square -> adapt the level-set
+    //          + homogeneous BC
+    auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        Matrix<RealType, 2, 1> ret;
+
+        RealType x_max = 0.99;
+        RealType x_min = 0.01;
+        RealType coeff = 2.*M_PI/(x_max - x_min);
+        
+        RealType X = (pt.x() - x_min) / (x_max - x_min);
+        RealType Y = (pt.y() - x_min) / (x_max - x_min);
+
+        RealType sin_x = std::sin(2.*M_PI*X);
+        RealType sin_y = std::sin(2.*M_PI*Y);
+        RealType cos_x = std::cos(2.*M_PI*X);
+        RealType cos_y = std::cos(2.*M_PI*Y);
+
+        ret(0) = - coeff*coeff*(2.*sin_y * cos_y * cos_x * cos_x
+                              - 6. * sin_y * cos_y * sin_x * sin_x)
+        + 5. * std::pow(pt.x() - 0.5, 4.);
+        
+        ret(1) = - coeff * coeff * ( 6. * sin_y * sin_y * cos_x * sin_x
+                                   - 2. * sin_x * cos_x * cos_y * cos_y)
+        + 5. * std::pow(pt.y() - 0.5, 4.);
+        
+        
+        return ret;
+    };
+
+    auto sol_vel = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        Matrix<RealType, 2, 1> ret;
+
+
+        RealType x_max = 0.99;
+        RealType x_min = 0.01;
+        
+        RealType X = (pt.x() - x_min) / (x_max - x_min);
+        RealType Y = (pt.y() - x_min) / (x_max - x_min);
+
+        RealType sin_x = std::sin(2.*M_PI*X);
+        RealType sin_y = std::sin(2.*M_PI*Y);
+        RealType cos_x = std::cos(2.*M_PI*X);
+        RealType cos_y = std::cos(2.*M_PI*Y);
+
+        
+        ret(0) =  sin_x * sin_x * sin_y * cos_y;
+        ret(1) = - sin_x * cos_x * sin_y * sin_y;
+
+        return ret;
+    };
+
+    auto sol_grad = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        Matrix<RealType, 2, 2> ret;
+
+
+        
+        RealType x_max = 0.99;
+        RealType x_min = 0.01;
+        RealType coeff = 2.*M_PI/(x_max - x_min);
+        
+        RealType X = (pt.x() - x_min) / (x_max - x_min);
+        RealType Y = (pt.y() - x_min) / (x_max - x_min);
+
+        RealType sin_x = std::sin(2.*M_PI*X);
+        RealType sin_y = std::sin(2.*M_PI*Y);
+        RealType cos_x = std::cos(2.*M_PI*X);
+        RealType cos_y = std::cos(2.*M_PI*Y);
+
+        
+        ret(0,0) = coeff * 2. * sin_x * cos_x * sin_y * cos_y;
+        ret(0,1) = coeff * sin_x * sin_x * (cos_y * cos_y - sin_y * sin_y);
+        ret(1,0) = - coeff * sin_y * sin_y * (cos_x * cos_x - sin_x * sin_x);
+        ret(1,1) = - 2. * coeff * sin_x * cos_x * cos_y * sin_y;
         
         return ret;
     };
@@ -4765,6 +4923,7 @@ int main(int argc, char **argv)
     mip.Nx = 5;
     mip.Ny = 5;
 
+    
     /* k <deg>:     method degree
      * M <num>:     number of cells in x direction
      * N <num>:     number of cells in y direction
@@ -4841,7 +5000,8 @@ int main(int argc, char **argv)
     /************** LEVEL SET FUNCTION **************/
     RealType radius = 1.0/3.0;
     // auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
-    auto level_set_function = line_level_set<RealType>(1.0);
+    // auto level_set_function = line_level_set<RealType>(1.0);
+    auto level_set_function = carre_level_set<RealType>(0.99, 0.01, 0.01, 0.99);
     /************** DO cutHHO MESH PROCESSING **************/
 
     tc.tic();
