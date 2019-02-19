@@ -50,7 +50,6 @@ using namespace Eigen;
 
 //#include "sol2/sol.hpp"
 
-
 //////////////////////////    PRODUCTS    ////////////////////////////////
 
 template<typename T, int N>
@@ -2296,13 +2295,13 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         
         return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - mid_y, 5.);
     };
-    #elif 1  // test on an immersed square -> adapt the level-set
+#elif 1  // test on an immersed square -> adapt the level-set
     //          + homogeneous BC
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
 
-        RealType x_max = 0.99;
-        RealType x_min = 0.01;
+        RealType x_max = 1.0;
+        RealType x_min = 0.0;
         RealType coeff = 2.*M_PI/(x_max - x_min);
         
         RealType X = (pt.x() - x_min) / (x_max - x_min);
@@ -2313,13 +2312,22 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         RealType cos_x = std::cos(2.*M_PI*X);
         RealType cos_y = std::cos(2.*M_PI*Y);
 
+        // ret(0) = - coeff*coeff*(2.*sin_y * cos_y * cos_x * cos_x
+        //                       - 6. * sin_y * cos_y * sin_x * sin_x)
+        // + 5. * std::pow(pt.x() - 0.5, 4.);
+        
+        // ret(1) = - coeff * coeff * ( 6. * sin_y * sin_y * cos_x * sin_x
+        //                            - 2. * sin_x * cos_x * cos_y * cos_y)
+        // + 5. * std::pow(pt.y() - 0.5, 4.);
+
+
         ret(0) = - coeff*coeff*(2.*sin_y * cos_y * cos_x * cos_x
                               - 6. * sin_y * cos_y * sin_x * sin_x)
-        + 5. * std::pow(pt.x() - 0.5, 4.);
+        + 5. * std::pow(pt.x(), 4.);
         
         ret(1) = - coeff * coeff * ( 6. * sin_y * sin_y * cos_x * sin_x
                                    - 2. * sin_x * cos_x * cos_y * cos_y)
-        + 5. * std::pow(pt.y() - 0.5, 4.);
+        + 5. * std::pow(pt.y(), 4.);
         
         
         return ret;
@@ -2329,8 +2337,8 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         Matrix<RealType, 2, 1> ret;
 
 
-        RealType x_max = 0.99;
-        RealType x_min = 0.01;
+        RealType x_max = 1.0;
+        RealType x_min = 0.0;
         
         RealType X = (pt.x() - x_min) / (x_max - x_min);
         RealType Y = (pt.y() - x_min) / (x_max - x_min);
@@ -2352,8 +2360,8 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
 
         
-        RealType x_max = 0.99;
-        RealType x_min = 0.01;
+        RealType x_max = 1.0;
+        RealType x_min = 0.0;
         RealType coeff = 2.*M_PI/(x_max - x_min);
         
         RealType X = (pt.x() - x_min) / (x_max - x_min);
@@ -2379,9 +2387,72 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
     auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
 
-        RealType mid_y = (0. + 1.0) / 2.;
+        // RealType mid_y = (0. + 1.0) / 2.;
         
-        return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - mid_y, 5.);
+        // return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - mid_y, 5.);
+        return std::pow(pt.x(), 5.)  +  std::pow(pt.y(), 5.) - 1./3.;
+    };
+#elif 0  // test in diskpp (on a square) (homogeneous BC)
+    auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        Matrix<RealType, 2, 1> ret;
+
+        RealType x1 = pt.x();
+        RealType x2 = x1 * x1;
+        RealType y1 = pt.y();
+        RealType y2 = y1 * y1;
+
+        RealType ax =  x2 * (x2 - 2. * x1 + 1.);
+        RealType ay =  y2 * (y2 - 2. * y1 + 1.);
+        RealType bx =  x1 * (4. * x2 - 6. * x1 + 2.);
+        RealType by =  y1 * (4. * y2 - 6. * y1 + 2.);
+        RealType cx = 12. * x2 - 12.* x1 + 2.;
+        RealType cy = 12. * y2 - 12.* y1 + 2.;
+        RealType dx = 24. * x1 - 12.;
+        RealType dy = 24. * y1 - 12.;
+
+        ret(0) = - cx * by - ax * dy + 5.* x2 * x2;
+        ret(1) = + cy * bx + ay * dx + 5.* y2 * y2;
+        
+        
+        return ret;
+    };
+
+    auto sol_vel = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        Matrix<RealType, 2, 1> ret;
+ 
+        RealType x1 = pt.x();
+        RealType x2 = x1 * x1;
+        RealType y1 = pt.y();
+        RealType y2 = y1 * y1;
+
+        ret(0) =  x2 * (x2 - 2. * x1 + 1.)  * y1 * (4. * y2 - 6. * y1 + 2.);
+        ret(1) = -y2 * (y2 - 2. * y1 + 1. ) * x1 * (4. * x2 - 6. * x1 + 2.);
+
+        return ret;
+    };
+
+    auto sol_grad = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        Matrix<RealType, 2, 2> ret;
+        
+        RealType x1 = pt.x();
+        RealType x2 = x1 * x1;
+        RealType y1 = pt.y();
+        RealType y2 = y1 * y1;
+        
+        ret(0,0) = x1 * (4. * x2 - 6. * x1 + 2.) * y1 * (4. * y2 - 6. * y1 + 2.);
+        ret(0,1) = x2 * ( x2 - 2. * x1 + 1.) * (12. * y2 - 12. * y1 + 2.);
+        ret(1,0) = - y2 * ( y2 - 2. * y1 + 1.) * (12. * x2 - 12. * x1 + 2.);
+        ret(1,1) = - ret(0,0);
+        
+        return ret;
+    };
+
+    auto bcs_fun = [&](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        return sol_vel(pt);
+    };
+
+    auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
+        return std::pow(pt.x(), 5.)  +  std::pow(pt.y(), 5.) - 1./3.;
     };
 #endif
 
@@ -5000,8 +5071,8 @@ int main(int argc, char **argv)
     /************** LEVEL SET FUNCTION **************/
     RealType radius = 1.0/3.0;
     // auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
-    // auto level_set_function = line_level_set<RealType>(1.0);
-    auto level_set_function = carre_level_set<RealType>(0.99, 0.01, 0.01, 0.99);
+    // auto level_set_function = line_level_set<RealType>(1.2);
+    auto level_set_function = carre_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
     /************** DO cutHHO MESH PROCESSING **************/
 
     tc.tic();
