@@ -1517,13 +1517,15 @@ make_hho_vector_naive_stabilization(const Mesh& msh, const typename Mesh::cell_t
 
     vector_cell_basis<Mesh,T> cb(msh, cl, celdeg);
 
-    auto h = measure(msh, cl);
+    // auto h = measure(msh, cl);
 
     for (size_t i = 0; i < fcs.size(); i++)
     {
         auto fc = fcs[i];
         vector_face_basis<Mesh,T> fb(msh, fc, facdeg);
 
+        auto h = measure(msh, fc);
+        
         Matrix<T, Dynamic, Dynamic> oper = Matrix<T, Dynamic, Dynamic>::Zero(fbs, msize);
         Matrix<T, Dynamic, Dynamic> mass = Matrix<T, Dynamic, Dynamic>::Zero(fbs, fbs);
         Matrix<T, Dynamic, Dynamic> trace = Matrix<T, Dynamic, Dynamic>::Zero(fbs, cbs);
@@ -1583,6 +1585,9 @@ make_hho_vector_cut_stabilization(const cuthho_mesh<T, ET>& msh,
         auto fc = fcs[i];
         vector_face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg);
 
+
+        auto hF = measure(msh, fc);
+        
         Matrix<T, Dynamic, Dynamic> oper = Matrix<T, Dynamic, Dynamic>::Zero(fbs, cbs+num_faces*fbs);
         Matrix<T, Dynamic, Dynamic> mass = Matrix<T, Dynamic, Dynamic>::Zero(fbs, fbs);
         Matrix<T, Dynamic, Dynamic> trace = Matrix<T, Dynamic, Dynamic>::Zero(fbs, cbs);
@@ -1604,7 +1609,8 @@ make_hho_vector_cut_stabilization(const cuthho_mesh<T, ET>& msh,
 
         oper.block(0, 0, fbs, cbs) = mass.llt().solve(trace);
 
-        data += oper.transpose() * mass * oper * (1./hT);
+        // data += oper.transpose() * mass * oper * (1./hT);
+        data += oper.transpose() * mass * oper * (1./hF);
     }
 
 
@@ -1618,9 +1624,10 @@ make_hho_vector_cut_stabilization(const cuthho_mesh<T, ET>& msh,
         
         const Matrix<T, Dynamic, Dynamic> d_phi_n = outer_product(d_phi, n);
         
-        data.block(0, 0, cbs, cbs) += qp.second * c_phi * c_phi.transpose() * parms.eta / hT;
-        data.block(0, 0, cbs, cbs) -= qp.second * d_phi_n * c_phi.transpose();
-        data.block(0, 0, cbs, cbs) -= qp.second * c_phi * d_phi_n.transpose();
+        data.block(0, 0, cbs, cbs) +=
+            sqrt(2) * qp.second * c_phi * c_phi.transpose() * parms.eta / hT;
+        // data.block(0, 0, cbs, cbs) -= qp.second * d_phi_n * c_phi.transpose();
+        // data.block(0, 0, cbs, cbs) -= qp.second * c_phi * d_phi_n.transpose();
     }
     
     return data;
@@ -1799,7 +1806,13 @@ make_vector_rhs(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>
             const Matrix<T, Dynamic, Dynamic> dphi_n = outer_product(dphi, n);
             
             ret.block(0, 0, cbs, 1)
-                += qp.second  * ( cell_eta(msh, cl)/hT * phi - dphi_n ) * bcs(qp.first);
+                += qp.second * sqrt(2) * ( cell_eta(msh, cl)/hT * phi ) * bcs(qp.first);
+
+            // ret.block(0, 0, cbs, 1)
+            //     += qp.second  * ( sqrt(2) * cell_eta(msh, cl)/hT * phi - dphi_n ) * bcs(qp.first);
+
+            // ret.block(0, 0, cbs, 1)
+            //      += qp.second  * ( cell_eta(msh, cl)/hT * phi - dphi_n ) * bcs(qp.first);
             
             source_vect += qp.second * outer_product(g_phi, n) * bcs(qp.first);
         }
@@ -2164,7 +2177,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
         return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - 0.5, 5.);
     };
-#elif 0  // non null velocity on the boundary
+#elif 1  // non null velocity on the boundary
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
 
@@ -2295,7 +2308,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         
         return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - mid_y, 5.);
     };
-#elif 1  // test on an immersed square -> adapt the level-set
+#elif 0  // test on an immersed square -> adapt the level-set
     //          + homogeneous BC
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
@@ -2312,22 +2325,22 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         RealType cos_x = std::cos(2.*M_PI*X);
         RealType cos_y = std::cos(2.*M_PI*Y);
 
-        // ret(0) = - coeff*coeff*(2.*sin_y * cos_y * cos_x * cos_x
-        //                       - 6. * sin_y * cos_y * sin_x * sin_x)
-        // + 5. * std::pow(pt.x() - 0.5, 4.);
-        
-        // ret(1) = - coeff * coeff * ( 6. * sin_y * sin_y * cos_x * sin_x
-        //                            - 2. * sin_x * cos_x * cos_y * cos_y)
-        // + 5. * std::pow(pt.y() - 0.5, 4.);
-
-
         ret(0) = - coeff*coeff*(2.*sin_y * cos_y * cos_x * cos_x
                               - 6. * sin_y * cos_y * sin_x * sin_x)
-        + 5. * std::pow(pt.x(), 4.);
+        + 5. * std::pow(pt.x() - 0.5, 4.);
         
         ret(1) = - coeff * coeff * ( 6. * sin_y * sin_y * cos_x * sin_x
                                    - 2. * sin_x * cos_x * cos_y * cos_y)
-        + 5. * std::pow(pt.y(), 4.);
+        + 5. * std::pow(pt.y() - 0.5, 4.);
+
+
+        // ret(0) = - coeff*coeff*(2.*sin_y * cos_y * cos_x * cos_x
+        //                       - 6. * sin_y * cos_y * sin_x * sin_x)
+        // + 5. * std::pow(pt.x(), 4.);
+        
+        // ret(1) = - coeff * coeff * ( 6. * sin_y * sin_y * cos_x * sin_x
+        //                            - 2. * sin_x * cos_x * cos_y * cos_y)
+        // + 5. * std::pow(pt.y(), 4.);
         
         
         return ret;
@@ -2387,10 +2400,10 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
     auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
 
-        // RealType mid_y = (0. + 1.0) / 2.;
+        RealType mid_y = (0. + 1.0) / 2.;
         
-        // return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - mid_y, 5.);
-        return std::pow(pt.x(), 5.)  +  std::pow(pt.y(), 5.) - 1./3.;
+        return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - mid_y, 5.);
+        // return std::pow(pt.x(), 5.)  +  std::pow(pt.y(), 5.) - 1./3.;
     };
 #elif 0  // test in diskpp (on a square) (homogeneous BC)
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
@@ -5070,9 +5083,9 @@ int main(int argc, char **argv)
     std::cout << bold << yellow << "Mesh generation: " << tc << " seconds" << reset << std::endl;
     /************** LEVEL SET FUNCTION **************/
     RealType radius = 1.0/3.0;
-    // auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
+    auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
     // auto level_set_function = line_level_set<RealType>(1.2);
-    auto level_set_function = carre_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
+    // auto level_set_function = carre_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
     /************** DO cutHHO MESH PROCESSING **************/
 
     tc.tic();
