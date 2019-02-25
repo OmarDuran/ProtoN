@@ -796,6 +796,23 @@ measure(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_t
 }
 
 template<typename T, size_t ET>
+T
+measure(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::face_type& fc,
+        const element_location& where)
+{
+    if ( !is_cut(msh, fc) ) /* Element is not cut, use std. integration */
+        return measure(msh, fc);
+
+
+    auto pts = points(msh, fc, where);
+    T x = pts[0].x() - pts[1].x();
+    T y = pts[0].y() - pts[1].y();
+
+    return sqrt( x*x + y*y );
+}
+
+
+template<typename T, size_t ET>
 std::vector< std::pair<point<T,2>, T> >
 integrate(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl,
           size_t degree, const element_location& where)

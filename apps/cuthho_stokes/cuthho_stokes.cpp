@@ -421,14 +421,14 @@ struct params
 {
     T kappa_1, kappa_2, eta;
 
-    params() : kappa_1(1.0), kappa_2(1.0), eta(5.0) {}
+    params() : kappa_1(1.0), kappa_2(1.0), eta(3000.0) {}
 };
 
 template<typename T, size_t ET>
 T
 cell_eta(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl)
 {
-    return 5.0;
+    return 3000.0;
 }
 
 template<typename T, size_t ET, typename Function>
@@ -1517,14 +1517,14 @@ make_hho_vector_naive_stabilization(const Mesh& msh, const typename Mesh::cell_t
 
     vector_cell_basis<Mesh,T> cb(msh, cl, celdeg);
 
-    // auto h = measure(msh, cl);
+    auto h = measure(msh, cl);
 
     for (size_t i = 0; i < fcs.size(); i++)
     {
         auto fc = fcs[i];
         vector_face_basis<Mesh,T> fb(msh, fc, facdeg);
 
-        auto h = measure(msh, fc);
+        // auto h = measure(msh, fc);
         
         Matrix<T, Dynamic, Dynamic> oper = Matrix<T, Dynamic, Dynamic>::Zero(fbs, msize);
         Matrix<T, Dynamic, Dynamic> mass = Matrix<T, Dynamic, Dynamic>::Zero(fbs, fbs);
@@ -1586,6 +1586,7 @@ make_hho_vector_cut_stabilization(const cuthho_mesh<T, ET>& msh,
         vector_face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg);
 
 
+        // auto hF = measure(msh, fc, where);
         auto hF = measure(msh, fc);
         
         Matrix<T, Dynamic, Dynamic> oper = Matrix<T, Dynamic, Dynamic>::Zero(fbs, cbs+num_faces*fbs);
@@ -1609,8 +1610,8 @@ make_hho_vector_cut_stabilization(const cuthho_mesh<T, ET>& msh,
 
         oper.block(0, 0, fbs, cbs) = mass.llt().solve(trace);
 
-        // data += oper.transpose() * mass * oper * (1./hT);
-        data += oper.transpose() * mass * oper * (1./hF);
+        data += oper.transpose() * mass * oper * (1./hT);
+        // data += oper.transpose() * mass * oper * (1./hF);
     }
 
 
@@ -1625,7 +1626,7 @@ make_hho_vector_cut_stabilization(const cuthho_mesh<T, ET>& msh,
         const Matrix<T, Dynamic, Dynamic> d_phi_n = outer_product(d_phi, n);
         
         data.block(0, 0, cbs, cbs) +=
-            sqrt(2) * qp.second * c_phi * c_phi.transpose() * parms.eta / hT;
+            qp.second * c_phi * c_phi.transpose() * parms.eta / hT;
         // data.block(0, 0, cbs, cbs) -= qp.second * d_phi_n * c_phi.transpose();
         // data.block(0, 0, cbs, cbs) -= qp.second * c_phi * d_phi_n.transpose();
     }
@@ -1806,7 +1807,7 @@ make_vector_rhs(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>
             const Matrix<T, Dynamic, Dynamic> dphi_n = outer_product(dphi, n);
             
             ret.block(0, 0, cbs, 1)
-                += qp.second * sqrt(2) * ( cell_eta(msh, cl)/hT * phi ) * bcs(qp.first);
+                += qp.second * ( cell_eta(msh, cl)/hT * phi ) * bcs(qp.first);
 
             // ret.block(0, 0, cbs, 1)
             //     += qp.second  * ( sqrt(2) * cell_eta(msh, cl)/hT * phi - dphi_n ) * bcs(qp.first);
@@ -2177,7 +2178,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
         return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - 0.5, 5.);
     };
-#elif 1  // non null velocity on the boundary
+#elif 0  // non null velocity on the boundary
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
 
@@ -2308,7 +2309,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         
         return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - mid_y, 5.);
     };
-#elif 0  // test on an immersed square -> adapt the level-set
+#elif 1  // test on an immersed square -> adapt the level-set
     //          + homogeneous BC
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
@@ -2637,7 +2638,9 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     auto sol_p_gp    = std::make_shared< gnuplot_output_object<RealType> >("fictdom_sol_p.dat");
     auto diff_p_gp    = std::make_shared< gnuplot_output_object<RealType> >("fictdom_diff_p.dat");
     auto diff_p_gp2    = std::make_shared< gnuplot_output_object<RealType> >("fictdom_diff_p2.dat");
-    
+
+    auto div_gp    = std::make_shared< gnuplot_output_object<RealType> >("fictdom_div.dat");
+    auto divR_gp   = std::make_shared< gnuplot_output_object<RealType> >("fictdom_DR.dat");
     
     auto int_gp  = std::make_shared< gnuplot_output_object<RealType> >("ficdom_int.dat");
 
@@ -2726,6 +2729,11 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         
         auto qps = integrate(msh, cl, 5, element_location::IN_NEGATIVE_SIDE);
         if ( !hide_fict_dom ) qps = integrate(msh, cl, 5/*, element_location::IN_NEGATIVE_SIDE*/);
+
+        Matrix<RealType, 2, 2> Id = Matrix<RealType, 2, 2>::Identity();
+        auto DR = make_hho_divergence_reconstruction(msh, cl, level_set_function, hdi, where).first;
+
+
         
         for (auto& qp : qps)
         {
@@ -2733,9 +2741,18 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
             auto c_phi_bis = cb.eval_basis(tp);
             auto c_val_bis = c_phi_bis.transpose() * cell_dofs;
-
+            auto s_phi = s_cb.eval_basis(tp);
             
-            RealType p_val = s_cb.eval_basis(tp).dot(loc_pressure);
+            
+            auto c_dphi = cb.eval_gradients(tp);
+            Matrix<RealType, Dynamic, 1> div_temp = inner_product(c_dphi, Id);
+            RealType DIV = div_temp.dot(cell_dofs);
+
+            Matrix<RealType, Dynamic, 1> DR_temp = DR * locdata_vel;
+            
+            RealType DIV_R = s_phi.dot(DR_temp); 
+            
+            RealType p_val = s_phi.dot(loc_pressure);
 
             RealType diff_p_val = pressure(tp) - p_val ;
             RealType diff_p_val2 = diff_p_val / pressure(tp);
@@ -2746,6 +2763,9 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
             diff_p_gp->add_data( tp, diff_p_val );
             diff_p_gp2->add_data( tp, diff_p_val2 );
             sol_p_gp->add_data( tp, pressure(tp) );
+            
+            divR_gp->add_data( tp, DIV_R );
+            div_gp->add_data( tp, DIV );
         }
 
         if ( location(msh, cl) == element_location::IN_NEGATIVE_SIDE ||
@@ -2812,6 +2832,10 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     postoutput.add_object(diff_p_gp2);
     postoutput.add_object(sol_p_gp);
     postoutput.add_object(int_gp);
+
+    postoutput.add_object(div_gp);
+    postoutput.add_object(divR_gp);    
+    
     if( sc ) postoutput.add_object(tests_p_gp); 
     postoutput.write();
 
@@ -5083,9 +5107,9 @@ int main(int argc, char **argv)
     std::cout << bold << yellow << "Mesh generation: " << tc << " seconds" << reset << std::endl;
     /************** LEVEL SET FUNCTION **************/
     RealType radius = 1.0/3.0;
-    auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
+    // auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
     // auto level_set_function = line_level_set<RealType>(1.2);
-    // auto level_set_function = carre_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
+    auto level_set_function = carre_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
     /************** DO cutHHO MESH PROCESSING **************/
 
     tc.tic();
