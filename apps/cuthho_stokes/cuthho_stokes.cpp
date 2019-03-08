@@ -421,14 +421,14 @@ struct params
 {
     T kappa_1, kappa_2, eta;
 
-    params() : kappa_1(1.0), kappa_2(1.0), eta(3000.0) {}
+    params() : kappa_1(1.0), kappa_2(1.0), eta(1.0) {}
 };
 
 template<typename T, size_t ET>
 T
 cell_eta(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl)
 {
-    return 3000.0;
+    return 1.0;
 }
 
 template<typename T, size_t ET, typename Function>
@@ -1624,6 +1624,7 @@ make_hho_vector_cut_stabilization(const cuthho_mesh<T, ET>& msh,
         const Matrix<T,2,1> n      = level_set_function.normal(qp.first);
         
         const Matrix<T, Dynamic, Dynamic> d_phi_n = outer_product(d_phi, n);
+
         
         data.block(0, 0, cbs, cbs) +=
             qp.second * c_phi * c_phi.transpose() * parms.eta / hT;
@@ -2178,7 +2179,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
         return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - 0.5, 5.);
     };
-#elif 0  // non null velocity on the boundary
+#elif 1  // non null velocity on the boundary
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
 
@@ -2309,7 +2310,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         
         return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - mid_y, 5.);
     };
-#elif 1  // test on an immersed square -> adapt the level-set
+#elif 0  // test on an immersed square -> adapt the level-set
     //          + homogeneous BC
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
@@ -2641,18 +2642,28 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
     auto div_gp    = std::make_shared< gnuplot_output_object<RealType> >("fictdom_div.dat");
     auto divR_gp   = std::make_shared< gnuplot_output_object<RealType> >("fictdom_DR.dat");
+
+    auto uF1_gp   = std::make_shared< gnuplot_output_object<RealType> >("fictdom_uF1.dat");
+    auto uF2_gp   = std::make_shared< gnuplot_output_object<RealType> >("fictdom_uF2.dat");
+
+    auto diff_uFT1_gp   = std::make_shared< gnuplot_output_object<RealType> >("fictdom_diff_uTF1.dat");
+    auto diff_uFT2_gp   = std::make_shared< gnuplot_output_object<RealType> >("fictdom_diff_uTF2.dat");
     
     auto int_gp  = std::make_shared< gnuplot_output_object<RealType> >("ficdom_int.dat");
 
 
     auto tests_p_gp = std::make_shared< gnuplot_output_object<RealType> >("test_p.dat");
 
+    
 
     RealType mean_pressure = 0.0;
     
     std::vector< Matrix<RealType, 2, 1> >   solution_uT;
 
     tc.tic();
+    RealType    L2_jumps = 0.0;
+    RealType    L2_boundary = 0.0;
+    RealType    L2_div   = 0.0;
     RealType    L2_error = 0.0;
     RealType    H1_error = 0.0;
     RealType    H1_sol_norm = 0.0;
@@ -2766,6 +2777,8 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
             
             divR_gp->add_data( tp, DIV_R );
             div_gp->add_data( tp, DIV );
+
+            L2_div += qp.second * DIV * DIV;
         }
 
         if ( location(msh, cl) == element_location::IN_NEGATIVE_SIDE ||
@@ -2814,6 +2827,62 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
             }
         }
 
+        ///// face unknowns output  /////
+        auto fcs = faces(msh, cl);
+        auto num_faces = fcs.size();
+        for (size_t i = 0; i < num_faces; i++)
+        {
+            auto fc = fcs[i];
+            Matrix<RealType, Dynamic, 1> loc_face_dofs = locdata_vel.block(cbs + i*fbs, 0, fbs, 1);
+            vector_face_basis<Mesh,RealType> fb(msh, fc, facdeg);
+            
+            auto qps = integrate(msh, fc, 2*facdeg, where);
+            for (auto& qp : qps)
+            {
+                auto tp = qp.first;
+                auto f_phi = fb.eval_basis(tp);
+
+                Matrix<RealType, 2, 1> f_vel = f_phi.transpose() * loc_face_dofs;
+                
+                uF1_gp->add_data( tp, f_vel[0] );
+                uF2_gp->add_data( tp, f_vel[1] );
+
+
+                auto c_phi_bis = cb.eval_basis(tp);
+                auto c_val_bis = c_phi_bis.transpose() * cell_dofs;
+
+                RealType diff_1 = f_vel[0] - c_val_bis[0];
+                RealType diff_2 = f_vel[1] - c_val_bis[1];
+                
+                diff_uFT1_gp->add_data( tp, diff_1 );
+                diff_uFT2_gp->add_data( tp, diff_2 );
+
+                L2_jumps += qp.second * diff_1 * diff_1;
+                L2_jumps += qp.second * diff_2 * diff_2;
+                
+            }
+        }
+        /////  boundary output   /////////////
+        if( is_cut(msh, cl) )
+        {
+            auto iqpts = integrate_interface(msh, cl, 1, element_location::IN_NEGATIVE_SIDE);
+            for (auto& qp : iqpts)
+            {
+                auto tp = qp.first;
+                auto c_phi_bis = cb.eval_basis(tp);
+                auto c_val_bis = c_phi_bis.transpose() * cell_dofs;
+                auto g_val = bcs_fun(tp);
+                
+                RealType diff_1 = g_val[0] - c_val_bis[0];
+                RealType diff_2 = g_val[1] - c_val_bis[1];
+                
+                diff_uFT1_gp->add_data( tp, diff_1 );
+                diff_uFT2_gp->add_data( tp, diff_2 );
+
+                L2_boundary += qp.second * diff_1 * diff_1;
+                L2_boundary += qp.second * diff_2 * diff_2;
+            }
+        }
         cell_i++;
     }
 
@@ -2835,10 +2904,21 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
     postoutput.add_object(div_gp);
     postoutput.add_object(divR_gp);    
+
+    postoutput.add_object(uF1_gp);
+    postoutput.add_object(uF2_gp);
+    postoutput.add_object(diff_uFT1_gp);
+    postoutput.add_object(diff_uFT2_gp);
     
     if( sc ) postoutput.add_object(tests_p_gp); 
     postoutput.write();
 
+
+
+    std::cout << bold << red << "Jump absolute error:           " << std::sqrt(L2_jumps) << std::endl;
+    std::cout << bold << red << "Boundary absolute error:           " << std::sqrt(L2_boundary) << std::endl;
+    std::cout << bold << red << "DIV absolute error:           " << std::sqrt(L2_div) << std::endl;
+    
     tc.toc();
     std::cout << bold << yellow << "Postprocessing: " << tc << " seconds" << reset << std::endl;
 
@@ -5107,9 +5187,10 @@ int main(int argc, char **argv)
     std::cout << bold << yellow << "Mesh generation: " << tc << " seconds" << reset << std::endl;
     /************** LEVEL SET FUNCTION **************/
     RealType radius = 1.0/3.0;
-    // auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
+    auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
     // auto level_set_function = line_level_set<RealType>(1.2);
-    auto level_set_function = carre_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
+    // auto level_set_function = carre_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
+    // auto level_set_function = carre_level_set<RealType>(1.05, -0.05, -0.05, 1.05);
     /************** DO cutHHO MESH PROCESSING **************/
 
     tc.tic();
