@@ -105,6 +105,25 @@ inner_product(const std::vector<Matrix<T, N, N>>& a, const Matrix<T, N, N>& b)
     return ret;
 }
 
+template<typename T, int N>
+Matrix<T, Dynamic, Dynamic>
+inner_product(const std::vector<Matrix<T, N, N>>& a, const std::vector<Matrix<T, N, N>>& b)
+{
+
+    assert( a.size() == b.size() );
+    
+    Matrix<T, Dynamic, Dynamic> ret( a.size(), b.size() );
+    
+    for (size_t i = 0; i < a.size(); i++)
+    {
+        for (size_t j = 0; j < b.size(); j++)
+        {
+            ret(i,j)        = inner_product(a[i],b[j]);
+        }
+    }
+    return ret;
+}
+
 
 /////////////////////////  LEVEL -- SETS  ///////////////////////////////
 
@@ -253,6 +272,378 @@ struct carre_level_set
 /*****************************************************************************
  *   Test stuff
  *****************************************************************************/
+template<typename T, size_t ET, typename Function>
+Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>
+make_star_norm_mat(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl, const Function& level_set_function, const hho_degree_info& di, element_location where)
+{
+    typedef Matrix<T, Dynamic, Dynamic> matrix_type;
+    
+    auto celdeg = di.cell_degree();
+    auto facdeg = di.face_degree();
+    auto pdeg = facdeg;
+
+    auto v_cbs = vector_cell_basis<cuthho_mesh<T, ET>,T>::size(celdeg);
+    auto s_cbs = cell_basis<cuthho_mesh<T, ET>,T>::size(pdeg);
+    auto fbs = vector_face_basis<cuthho_mesh<T, ET>,T>::size(facdeg);
+
+    const auto fcs = faces(msh, cl);
+    const auto num_faces = fcs.size();
+    const auto ns = normals(msh, cl);
+
+    auto hT = measure(msh, cl);
+    
+    auto dofs_tot = v_cbs + num_faces * fbs + s_cbs;
+    auto p_offset = v_cbs + num_faces * fbs;
+    
+    matrix_type ret = matrix_type::Zero(dofs_tot, dofs_tot);
+
+    vector_cell_basis<cuthho_mesh<T, ET>,T>     v_cb(msh, cl, celdeg);
+    cell_basis<cuthho_mesh<T, ET>,T>     s_cb(msh, cl, pdeg);
+    
+    // cell part
+    auto qps = integrate(msh, cl, 2*(celdeg-1), where);
+    for (auto& qp : qps)
+    {
+        const std::vector<Matrix<T, 2, 2>> dvphi = v_cb.eval_gradients(qp.first);
+        const auto s_phi = s_cb.eval_basis(qp.first);
+
+        // gradients of the cell component
+        ret.block(0, 0, v_cbs, v_cbs) +=  qp.second * inner_product(dvphi, dvphi);
+
+        // L2-norm for the pressure
+        ret.block(p_offset, p_offset, s_cbs, s_cbs) += qp.second * s_phi * s_phi.transpose();
+    }
+
+    // jumps between cell and faces components -> not the projection here
+    for (size_t i = 0; i < fcs.size(); i++)
+    {
+        const auto fc     = fcs[i];
+        vector_face_basis<cuthho_mesh<T, ET>,T>            fb(msh, fc, facdeg);
+
+        const auto qps_f = integrate(msh, fc, facdeg + celdeg);
+        for (auto& qp : qps_f)
+        {
+            const auto c_phi = v_cb.eval_basis(qp.first);
+            const auto f_phi = fb.eval_basis(qp.first);
+
+            ret.block(0, 0, v_cbs, v_cbs) += qp.second * c_phi * c_phi.transpose() / hT;
+            ret.block(v_cbs + i*fbs, 0, fbs, v_cbs) -= qp.second * f_phi * c_phi.transpose() / hT;
+            ret.block(0, v_cbs + i*fbs, v_cbs, fbs) -= qp.second * c_phi * f_phi.transpose() / hT;
+            ret.block(v_cbs + i*fbs, v_cbs + i*fbs, fbs, fbs) += qp.second * f_phi * f_phi.transpose() / hT;
+        }
+        
+    }
+
+    // if cut : trace of the cell on the interface
+    if( is_cut(msh, cl) )
+    {
+        auto iqps = integrate_interface(msh, cl, 2*celdeg, element_location::IN_NEGATIVE_SIDE);
+        for (auto& qp : iqps)
+        {
+            const auto c_phi = v_cb.eval_basis(qp.first);
+
+            ret.block(0, 0, v_cbs, v_cbs) += qp.second * c_phi * c_phi.transpose() / hT;
+        }
+    }
+
+    
+    return ret;
+}
+
+
+template<typename Mesh, typename Function>
+void
+compute_inf_sup(const Mesh& msh, const Function& level_set_function, const size_t k)
+{
+    using T = typename Mesh::coordinate_type;
+
+    auto celdeg = k+1;
+    auto facdeg = k;
+    auto pdeg = k;
+
+    auto v_cbs = vector_cell_basis<Mesh,T>::size(celdeg);
+    auto s_cbs = cell_basis<Mesh,T>::size(pdeg);
+    auto fbs = vector_face_basis<Mesh,T>::size(facdeg);
+    
+    hho_degree_info hdi(k+1, k);
+    element_location where = element_location::IN_NEGATIVE_SIDE;
+    
+    std::cout << "start compute inf--sup" << std::endl;
+    auto assembler = make_stokes_assembler(msh, hdi);
+
+    auto bgm = make_build_glob_mat(msh, hdi);
+
+    
+    for (auto cl : msh.cells)
+    {
+
+        
+        const auto num_faces = faces(msh, cl).size();
+        const auto dofs_tot_loc = v_cbs + num_faces * fbs + s_cbs;
+        const auto p_offset = v_cbs + num_faces * fbs;
+        
+        vector_cell_basis<Mesh, T> v_cb(msh, cl, celdeg);
+        cell_basis<Mesh, T> s_cb(msh, cl, pdeg);
+
+        /**** compute the matrices involved  ****/
+
+        // norm matrix
+        auto norm_mat = make_star_norm_mat(msh, cl, level_set_function, hdi, where);
+
+        // bilinear operator matrix
+        auto gr = make_hho_gradrec_matrix(msh, cl, level_set_function, hdi, where);   
+        Matrix<T, Dynamic, Dynamic> stab = make_hho_vector_cut_stabilization(msh, cl, hdi, where, level_set_function);
+        auto dr = make_hho_divergence_reconstruction(msh, cl, level_set_function, hdi, where);
+        Matrix<T, Dynamic, Dynamic> lc = gr.second + stab;
+
+        /////////////////////////////
+        // Matrix<T, Dynamic, 1> f0 = Matrix<T, Dynamic, 1>::Zero(lc.rows());
+        // Matrix<T, Dynamic, 1> p_rhs0 = Matrix<T, Dynamic, 1>::Zero(s_cbs);
+        // auto bcs_fun0 = [&](const typename cuthho_poly_mesh<T>::point_type& pt) -> auto {
+        //     Matrix<T, 2, 1> bcs;
+        //     return bcs;
+        // };
+        ////////////////////////////
+        
+        Matrix<T, Dynamic, Dynamic> loc_mat = Matrix<T, Dynamic, Dynamic>::Zero( dofs_tot_loc , dofs_tot_loc );
+        loc_mat.block(0, 0, p_offset, p_offset) = lc;
+        loc_mat.block(p_offset, 0, s_cbs, p_offset) = -dr.second;
+        loc_mat.block(0, p_offset, p_offset, s_cbs) = -dr.second.transpose();
+
+        bgm.assemble(msh, cl, loc_mat);
+    }
+
+
+    bgm.finalize();
+}
+
+
+template<typename Mesh>
+class build_glob_mat
+{
+    using T = typename Mesh::coordinate_type;
+
+    std::vector<size_t>                 compress_cell_table;
+    std::vector<size_t>                 expand_cell_table;
+    std::vector<size_t>                 compress_face_table;
+    std::vector<size_t>                 expand_face_table;
+
+    size_t                 system_size;
+    size_t                 num_in_faces;
+    size_t                 num_in_cells;
+    hho_degree_info                     di;
+    std::vector< Triplet<T> >           triplets;
+
+    class assembly_index
+    {
+        size_t  idx;
+        bool    assem;
+
+    public:
+        assembly_index(size_t i, bool as)
+            : idx(i), assem(as)
+        {}
+
+        operator size_t() const
+        {
+            if (!assem)
+                throw std::logic_error("Invalid assembly_index");
+
+            return idx;
+        }
+
+        bool assemble() const
+        {
+            return assem;
+        }
+
+        friend std::ostream& operator<<(std::ostream& os, const assembly_index& as)
+        {
+            os << "(" << as.idx << "," << as.assem << ")";
+            return os;
+        }
+    };
+    
+public:
+    SparseMatrix<T>         glob_mat;
+    
+    build_glob_mat(const Mesh& msh, hho_degree_info hdi)
+        : di(hdi)
+        {
+            
+            auto celdeg = di.cell_degree();
+            auto facdeg = di.face_degree();
+            auto pdeg = facdeg;
+        
+            auto cbs_B = cell_basis<Mesh,T>::size(pdeg);
+            auto cbs_A = vector_cell_basis<Mesh,T>::size(celdeg);
+            auto fbs = vector_face_basis<Mesh,T>::size(facdeg);
+
+
+            auto f_is_out = [&](const typename Mesh::face_type& fc) -> bool {
+                return (fc.is_boundary && fc.bndtype == boundary::DIRICHLET)
+                || location(msh, fc) == element_location::IN_POSITIVE_SIDE;
+            };
+
+            auto c_is_out = [&](const typename Mesh::cell_type& cl) -> bool {
+                return location(msh, cl) == element_location::IN_POSITIVE_SIDE;
+            };
+            
+            auto num_all_faces = msh.faces.size();
+            auto num_out_faces = std::count_if(msh.faces.begin(), msh.faces.end(), f_is_out);
+
+            
+            auto num_all_cells = msh.cells.size();
+            auto num_out_cells = std::count_if(msh.cells.begin(), msh.cells.end(), c_is_out);
+            
+            num_in_faces = num_all_faces - num_out_faces;
+            num_in_cells = num_all_cells - num_out_cells;
+            
+            system_size = (cbs_A + cbs_B) * num_in_cells + fbs * num_in_faces + 1;
+
+            glob_mat = SparseMatrix<T>( system_size, system_size );
+
+            compress_face_table.resize( num_all_faces );
+            expand_face_table.resize( num_in_faces );
+            
+            size_t compressed_offset = 0;
+            for (size_t i = 0; i < num_all_faces; i++)
+            {
+                auto fc = msh.faces[i];
+                if ( !f_is_out(fc) )
+                {
+                    compress_face_table.at(i) = compressed_offset;
+                    expand_face_table.at(compressed_offset) = i;
+                    compressed_offset++;
+                }
+            }
+
+            compress_cell_table.resize( num_all_cells );
+            expand_cell_table.resize( num_in_cells );
+            
+            compressed_offset = 0;
+            for (size_t i = 0; i < num_all_cells; i++)
+            {
+                auto fc = msh.cells[i];
+                if ( !c_is_out(fc) )
+                {
+                    compress_cell_table.at(i) = compressed_offset;
+                    expand_cell_table.at(compressed_offset) = i;
+                    compressed_offset++;
+                }
+            }
+        };
+
+    void assemble(const Mesh& msh, const typename Mesh::cell_type& cl,
+                  const Matrix<T, Dynamic, Dynamic>& loc_mat)
+        {
+            if( location(msh, cl) == element_location::IN_POSITIVE_SIDE )
+                return;
+            
+            
+            auto celdeg = di.cell_degree();
+            auto facdeg = di.face_degree();
+            auto pdeg = facdeg;
+
+            auto cbs_B = cell_basis<Mesh,T>::size(pdeg);
+            auto cbs_A = vector_cell_basis<Mesh,T>::size(celdeg);
+            auto fbs_A = vector_face_basis<Mesh,T>::size(facdeg);
+
+            
+            auto fcs = faces(msh, cl);
+            auto num_faces = fcs.size();
+
+            auto cell_offset        = compress_cell_table.at(offset(msh, cl));
+            auto cell_LHS_offset    = cell_offset * cbs_A;
+            auto p_offset = num_in_cells * cbs_A + num_in_faces * fbs_A + cell_offset * cbs_B;
+            
+            std::vector<assembly_index> asm_map;
+            for (size_t i = 0; i < cbs_A; i++)
+                asm_map.push_back( assembly_index(cell_LHS_offset+i, true) );
+            for (size_t i = 0; i < cbs_B; i++)
+                asm_map.push_back( assembly_index(p_offset+i, true) );
+
+            for (size_t face_i = 0; face_i < num_faces; face_i++)
+            {
+                auto fc = fcs[face_i];
+                auto face_offset = offset(msh, fc);
+                auto face_LHS_offset = cbs_A * num_in_cells
+                    + compress_face_table.at(face_offset)*fbs_A;
+
+                bool out = fc.is_boundary && fc.bndtype == boundary::DIRICHLET
+                    || location(msh, cl) == element_location::IN_POSITIVE_SIDE;
+
+                for (size_t i = 0; i < fbs_A; i++)
+                    asm_map.push_back( assembly_index(face_LHS_offset+i, !out) );
+            }
+
+            assert( asm_map.size() == loc_mat.rows() && asm_map.size() == loc_mat.cols() );
+            
+            for(size_t i = 0; i < loc_mat.rows(); i++)
+            {
+                if ( !asm_map[i].assemble() )
+                    continue;
+
+                for (size_t j = 0; j < loc_mat.cols(); j++)
+                {   
+                    if ( asm_map[j].assemble() )
+                        triplets.push_back( Triplet<T>(asm_map[i], asm_map[j], loc_mat(i,j)) );
+                    
+                }
+            }
+
+        } // assemble()
+
+    void add_zero_mean_p(const Mesh& msh)
+        {
+            auto celdeg = di.cell_degree();
+            auto facdeg = di.face_degree();
+            auto pdeg = facdeg;
+
+            auto cbs_B = cell_basis<Mesh,T>::size(pdeg);
+            auto cbs_A = vector_cell_basis<Mesh,T>::size(celdeg);
+            auto fbs_A = vector_face_basis<Mesh,T>::size(facdeg);
+
+
+            auto MULT_offset = system_size - 1;
+            
+            for(auto& cl : msh.cells)
+            {
+                auto cell_offset        = compress_cell_table.at(offset(msh, cl));
+                auto p_offset = num_in_cells * cbs_A + num_in_faces * fbs_A + cell_offset * cbs_B;
+
+                cell_basis<Mesh,T>     s_cb(msh, cl, pdeg);
+                Matrix<T, Dynamic, 1> Mult = Matrix<T, Dynamic, 1>::Zero(cbs_B);
+                auto qps = integrate(msh, cl, pdeg, element_location::IN_NEGATIVE_SIDE);
+                for (auto& qp : qps)
+                {
+                    auto s_phi = s_cb.eval_basis(qp.first);
+                    Mult += qp.second * s_phi;
+                }
+                for(size_t i = 0; i < cbs_B; i++)
+                {
+                    triplets.push_back( Triplet<T>(MULT_offset, p_offset + i, Mult[i] ) );
+                    triplets.push_back( Triplet<T>(p_offset + i, MULT_offset, Mult[i] ) );
+                }
+            }
+        }
+
+    void finalize(void)
+        {
+            glob_mat.setFromTriplets( triplets.begin(), triplets.end() );
+            triplets.clear();
+        }
+};
+
+
+template<typename Mesh>
+auto make_build_glob_mat(const Mesh& msh, hho_degree_info hdi)
+{
+    return build_glob_mat<Mesh>(msh, hdi);
+}
+
+
+
 template<typename Mesh>
 void
 plot_basis_functions(const Mesh& msh)
@@ -5222,13 +5613,19 @@ int main(int argc, char **argv)
         output_mesh_info(msh, level_set_function);
     }
 
+#if 1
+    compute_inf_sup(msh, level_set_function, degree);
+    
+#else
+    
     if (solve_interface)
         run_cuthho_interface(msh, level_set_function, degree);
     
     if (solve_fictdom)
         run_cuthho_fictdom(msh, level_set_function, degree);
 
-
+#endif
+    
 #if 0
 
 
