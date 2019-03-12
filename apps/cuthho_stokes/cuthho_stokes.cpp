@@ -812,14 +812,14 @@ struct params
 {
     T kappa_1, kappa_2, eta;
 
-    params() : kappa_1(1.0), kappa_2(1.0), eta(1.0) {}
+    params() : kappa_1(1.0), kappa_2(1.0), eta(1.3) {}
 };
 
 template<typename T, size_t ET>
 T
 cell_eta(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl)
 {
-    return 1.0;
+    return 1.3;
 }
 
 template<typename T, size_t ET, typename Function>
@@ -1900,8 +1900,13 @@ make_hho_vector_naive_stabilization(const Mesh& msh, const typename Mesh::cell_t
     auto cbs = vector_cell_basis<Mesh,T>::size(celdeg);
     auto fbs = vector_face_basis<Mesh,T>::size(facdeg);
 
-    auto fcs = faces(msh, cl);
+    auto s_fbs = face_basis<Mesh,T>::size(facdeg);
 
+    auto fcs = faces(msh, cl);
+    const auto ns = normals(msh, cl);
+
+
+    
     size_t msize = cbs+fcs.size()*fbs;
     Matrix<T, Dynamic, Dynamic> data = Matrix<T, Dynamic, Dynamic>::Zero(msize, msize);
     Matrix<T, Dynamic, Dynamic> If = Matrix<T, Dynamic, Dynamic>::Identity(fbs, fbs);
@@ -1913,16 +1918,60 @@ make_hho_vector_naive_stabilization(const Mesh& msh, const typename Mesh::cell_t
     for (size_t i = 0; i < fcs.size(); i++)
     {
         auto fc = fcs[i];
-        vector_face_basis<Mesh,T> fb(msh, fc, facdeg);
-
-        // auto h = measure(msh, fc);
+        auto n = ns[i];
         
-        Matrix<T, Dynamic, Dynamic> oper = Matrix<T, Dynamic, Dynamic>::Zero(fbs, msize);
-        Matrix<T, Dynamic, Dynamic> mass = Matrix<T, Dynamic, Dynamic>::Zero(fbs, fbs);
-        Matrix<T, Dynamic, Dynamic> trace = Matrix<T, Dynamic, Dynamic>::Zero(fbs, cbs);
+        vector_face_basis<Mesh,T> fb(msh, fc, facdeg);
+        
 
+
+
+
+#if 1 // decomposition n / t
+        ///// parameter to tune
+        T s_param = cell_eta(msh, cl);
+        /////
+        Matrix<T, 2, 1> t;
+        t[0] = -n[1];
+        t[1] = n[0];
+    
+        face_basis<Mesh,T> s_fb(msh, fc, facdeg);
+        Matrix<T, Dynamic, Dynamic> mass = Matrix<T, Dynamic, Dynamic>::Zero(s_fbs, s_fbs);
+        Matrix<T, Dynamic, Dynamic> trace_n = Matrix<T, Dynamic, Dynamic>::Zero(s_fbs, msize);
+        Matrix<T, Dynamic, Dynamic> trace_t = Matrix<T, Dynamic, Dynamic>::Zero(s_fbs, msize);
+        auto qps = integrate(msh, fc, 2*facdeg);
+        for (auto& qp : qps)
+        {
+            auto c_phi = cb.eval_basis(qp.first);
+            auto s_f_phi = s_fb.eval_basis(qp.first);
+            auto f_phi = fb.eval_basis(qp.first);
+            
+            auto c_phi_n = c_phi * n;
+            auto c_phi_t = c_phi * t;
+            auto f_phi_n = f_phi * n;
+            auto f_phi_t = f_phi * t;
+            
+
+            mass += qp.second * s_f_phi * s_f_phi.transpose();
+            
+            trace_n.block(0, 0, s_fbs, cbs) += qp.second * s_f_phi * c_phi_n.transpose();
+            trace_t.block(0, 0, s_fbs, cbs) += qp.second * s_f_phi * c_phi_t.transpose();
+            trace_n.block(0, cbs+i*fbs, s_fbs, fbs) -= qp.second * s_f_phi * f_phi_n.transpose();
+            trace_t.block(0, cbs+i*fbs, s_fbs, fbs) -= qp.second * s_f_phi * f_phi_t.transpose();
+        }
+        Matrix<T, Dynamic, Dynamic> oper_n = Matrix<T, Dynamic, Dynamic>::Zero(s_fbs, msize);
+        Matrix<T, Dynamic, Dynamic> oper_t = Matrix<T, Dynamic, Dynamic>::Zero(s_fbs, msize);
+        oper_n = mass.llt().solve(trace_n);
+        oper_t = mass.llt().solve(trace_t);
+
+        data += s_param * oper_n.transpose() * mass * oper_n * (1./h);
+        data += oper_t.transpose() * mass * oper_t * (1./h);
+#else // standard version
+        Matrix<T, Dynamic, Dynamic> oper = Matrix<T, Dynamic, Dynamic>::Zero(fbs, msize);
         oper.block(0, cbs+i*fbs, fbs, fbs) = -If;
 
+        Matrix<T, Dynamic, Dynamic> mass = Matrix<T, Dynamic, Dynamic>::Zero(fbs, fbs);
+        Matrix<T, Dynamic, Dynamic> trace = Matrix<T, Dynamic, Dynamic>::Zero(fbs, cbs);
+        
         auto qps = integrate(msh, fc, 2*facdeg);
         for (auto& qp : qps)
         {
@@ -1936,6 +1985,8 @@ make_hho_vector_naive_stabilization(const Mesh& msh, const typename Mesh::cell_t
         oper.block(0, 0, fbs, cbs) = mass.llt().solve(trace);
 
         data += oper.transpose() * mass * oper * (1./h);
+#endif
+        
     }
 
     return data;
@@ -1959,9 +2010,12 @@ make_hho_vector_cut_stabilization(const cuthho_mesh<T, ET>& msh,
 
     auto cbs = vector_cell_basis<cuthho_mesh<T, ET>,T>::size(celdeg);
     auto fbs = vector_face_basis<cuthho_mesh<T, ET>,T>::size(facdeg);
+    auto s_fbs = face_basis<cuthho_mesh<T, ET>,T>::size(facdeg);
 
     auto fcs = faces(msh, cl);
     auto num_faces = fcs.size();
+    const auto ns = normals(msh, cl);
+    size_t msize = cbs+fcs.size()*fbs;
 
     Matrix<T, Dynamic, Dynamic> data = Matrix<T, Dynamic, Dynamic>::Zero(cbs+num_faces*fbs, cbs+num_faces*fbs);
     Matrix<T, Dynamic, Dynamic> If = Matrix<T, Dynamic, Dynamic>::Identity(fbs, fbs);
@@ -1974,18 +2028,65 @@ make_hho_vector_cut_stabilization(const cuthho_mesh<T, ET>& msh,
     for (size_t i = 0; i < num_faces; i++)
     {
         auto fc = fcs[i];
+        auto n = ns[i];
+        
         vector_face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg);
 
 
         // auto hF = measure(msh, fc, where);
-        auto hF = measure(msh, fc);
-        
-        Matrix<T, Dynamic, Dynamic> oper = Matrix<T, Dynamic, Dynamic>::Zero(fbs, cbs+num_faces*fbs);
-        Matrix<T, Dynamic, Dynamic> mass = Matrix<T, Dynamic, Dynamic>::Zero(fbs, fbs);
-        Matrix<T, Dynamic, Dynamic> trace = Matrix<T, Dynamic, Dynamic>::Zero(fbs, cbs);
+        // auto hF = measure(msh, fc);
 
+
+
+
+        #if 1 // decomposition n / t
+        ///// parameter to tune
+        T s_param = cell_eta(msh, cl);
+        /////
+        Matrix<T, 2, 1> t;
+        t[0] = -n[1];
+        t[1] = n[0];
+    
+        face_basis<cuthho_mesh<T, ET>,T> s_fb(msh, fc, facdeg);
+        Matrix<T, Dynamic, Dynamic> mass = Matrix<T, Dynamic, Dynamic>::Zero(s_fbs, s_fbs);
+        Matrix<T, Dynamic, Dynamic> trace_n = Matrix<T, Dynamic, Dynamic>::Zero(s_fbs, msize);
+        Matrix<T, Dynamic, Dynamic> trace_t = Matrix<T, Dynamic, Dynamic>::Zero(s_fbs, msize);
+        auto qps = integrate(msh, fc, 2*facdeg, where);
+        for (auto& qp : qps)
+        {
+            auto c_phi = cb.eval_basis(qp.first);
+            auto s_f_phi = s_fb.eval_basis(qp.first);
+            auto f_phi = fb.eval_basis(qp.first);
+            
+            auto c_phi_n = c_phi * n;
+            auto c_phi_t = c_phi * t;
+            auto f_phi_n = f_phi * n;
+            auto f_phi_t = f_phi * t;
+            
+
+            mass += qp.second * s_f_phi * s_f_phi.transpose();
+            
+            trace_n.block(0, 0, s_fbs, cbs) += qp.second * s_f_phi * c_phi_n.transpose();
+            trace_t.block(0, 0, s_fbs, cbs) += qp.second * s_f_phi * c_phi_t.transpose();
+            trace_n.block(0, cbs+i*fbs, s_fbs, fbs) -= qp.second * s_f_phi * f_phi_n.transpose();
+            trace_t.block(0, cbs+i*fbs, s_fbs, fbs) -= qp.second * s_f_phi * f_phi_t.transpose();
+        }
+        if (qps.size() == 0) /* Avoid to invert a zero matrix */
+            continue;
+        Matrix<T, Dynamic, Dynamic> oper_n = Matrix<T, Dynamic, Dynamic>::Zero(s_fbs, msize);
+        Matrix<T, Dynamic, Dynamic> oper_t = Matrix<T, Dynamic, Dynamic>::Zero(s_fbs, msize);
+        oper_n = mass.llt().solve(trace_n);
+        oper_t = mass.llt().solve(trace_t);
+
+        data += s_param * oper_n.transpose() * mass * oper_n * (1./hT);
+        data += oper_t.transpose() * mass * oper_t * (1./hT);
+#else // standard version
+        Matrix<T, Dynamic, Dynamic> oper = Matrix<T, Dynamic, Dynamic>::Zero(fbs, msize);
         oper.block(0, cbs+i*fbs, fbs, fbs) = -If;
 
+        Matrix<T, Dynamic, Dynamic> mass = Matrix<T, Dynamic, Dynamic>::Zero(fbs, fbs);
+        Matrix<T, Dynamic, Dynamic> trace = Matrix<T, Dynamic, Dynamic>::Zero(fbs, cbs);
+        
         auto qps = integrate(msh, fc, 2*facdeg, where);
         for (auto& qp : qps)
         {
@@ -1995,14 +2096,38 @@ make_hho_vector_cut_stabilization(const cuthho_mesh<T, ET>& msh,
             mass += qp.second * f_phi * f_phi.transpose();
             trace += qp.second * f_phi * c_phi.transpose();
         }
-
         if (qps.size() == 0) /* Avoid to invert a zero matrix */
             continue;
-
         oper.block(0, 0, fbs, cbs) = mass.llt().solve(trace);
 
         data += oper.transpose() * mass * oper * (1./hT);
-        // data += oper.transpose() * mass * oper * (1./hF);
+#endif
+
+
+        
+        // Matrix<T, Dynamic, Dynamic> oper = Matrix<T, Dynamic, Dynamic>::Zero(fbs, cbs+num_faces*fbs);
+        // Matrix<T, Dynamic, Dynamic> mass = Matrix<T, Dynamic, Dynamic>::Zero(fbs, fbs);
+        // Matrix<T, Dynamic, Dynamic> trace = Matrix<T, Dynamic, Dynamic>::Zero(fbs, cbs);
+
+        // oper.block(0, cbs+i*fbs, fbs, fbs) = -If;
+
+        // auto qps = integrate(msh, fc, 2*facdeg, where);
+        // for (auto& qp : qps)
+        // {
+        //     auto c_phi = cb.eval_basis(qp.first);
+        //     auto f_phi = fb.eval_basis(qp.first);
+
+        //     mass += qp.second * f_phi * f_phi.transpose();
+        //     trace += qp.second * f_phi * c_phi.transpose();
+        // }
+
+        // if (qps.size() == 0) /* Avoid to invert a zero matrix */
+        //     continue;
+
+        // oper.block(0, 0, fbs, cbs) = mass.llt().solve(trace);
+
+        // data += oper.transpose() * mass * oper * (1./hT);
+
     }
 
 
@@ -2570,7 +2695,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
         return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - 0.5, 5.);
     };
-#elif 1  // non null velocity on the boundary
+#elif 0  // non null velocity on the boundary
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
 
@@ -2631,7 +2756,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     auto pressure =  [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
         return std::pow(pt.x() - 0.5, 5.)  +  std::pow(pt.y() - 0.5, 5.);
     };
-#elif 0  // test on a rectangle -> adapt the level-set
+#elif 1  // test on a rectangle -> adapt the level-set
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
         Matrix<RealType, 2, 1> ret;
 
@@ -5578,9 +5703,9 @@ int main(int argc, char **argv)
     std::cout << bold << yellow << "Mesh generation: " << tc << " seconds" << reset << std::endl;
     /************** LEVEL SET FUNCTION **************/
     RealType radius = 1.0/3.0;
-    auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
+    // auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
     // auto level_set_function = line_level_set<RealType>(1.2);
-    // auto level_set_function = carre_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
+    auto level_set_function = carre_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
     // auto level_set_function = carre_level_set<RealType>(1.05, -0.05, -0.05, 1.05);
     /************** DO cutHHO MESH PROCESSING **************/
 
@@ -5613,7 +5738,7 @@ int main(int argc, char **argv)
         output_mesh_info(msh, level_set_function);
     }
 
-#if 1
+#if 0
     compute_inf_sup(msh, level_set_function, degree);
     
 #else
