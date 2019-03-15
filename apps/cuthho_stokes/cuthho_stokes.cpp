@@ -371,7 +371,8 @@ compute_inf_sup(const Mesh& msh, const Function& level_set_function, const size_
     std::cout << "start compute inf--sup" << std::endl;
     auto assembler = make_stokes_assembler(msh, hdi);
 
-    auto bgm = make_build_glob_mat(msh, hdi);
+    auto bgm_M = make_build_glob_mat(msh, hdi);
+    auto bgm_A = make_build_glob_mat(msh, hdi);
 
     
     for (auto cl : msh.cells)
@@ -389,32 +390,43 @@ compute_inf_sup(const Mesh& msh, const Function& level_set_function, const size_
 
         // norm matrix
         auto norm_mat = make_star_norm_mat(msh, cl, level_set_function, hdi, where);
-
+        bgm_M.assemble(msh, cl, norm_mat);
+        
         // bilinear operator matrix
         auto gr = make_hho_gradrec_matrix(msh, cl, level_set_function, hdi, where);   
         Matrix<T, Dynamic, Dynamic> stab = make_hho_vector_cut_stabilization(msh, cl, hdi, where, level_set_function);
         auto dr = make_hho_divergence_reconstruction(msh, cl, level_set_function, hdi, where);
         Matrix<T, Dynamic, Dynamic> lc = gr.second + stab;
 
-        /////////////////////////////
-        // Matrix<T, Dynamic, 1> f0 = Matrix<T, Dynamic, 1>::Zero(lc.rows());
-        // Matrix<T, Dynamic, 1> p_rhs0 = Matrix<T, Dynamic, 1>::Zero(s_cbs);
-        // auto bcs_fun0 = [&](const typename cuthho_poly_mesh<T>::point_type& pt) -> auto {
-        //     Matrix<T, 2, 1> bcs;
-        //     return bcs;
-        // };
-        ////////////////////////////
         
         Matrix<T, Dynamic, Dynamic> loc_mat = Matrix<T, Dynamic, Dynamic>::Zero( dofs_tot_loc , dofs_tot_loc );
         loc_mat.block(0, 0, p_offset, p_offset) = lc;
         loc_mat.block(p_offset, 0, s_cbs, p_offset) = -dr.second;
         loc_mat.block(0, p_offset, p_offset, s_cbs) = -dr.second.transpose();
 
-        bgm.assemble(msh, cl, loc_mat);
+        bgm_A.assemble(msh, cl, loc_mat);
     }
 
+    bgm_A.add_zero_mean_p(msh);
+    bgm_A.finalize();
 
-    bgm.finalize();
+    bgm_M.add_one_diag();
+    bgm_M.finalize();
+
+
+    // generalized eigenvalue problem to solve :
+    // A M^-1 A^T X = \lambda M X
+    // with M = bgm_M, A = bgm_A
+    SparseMatrix<T> M = bgm_M.glob_mat;
+    SparseMatrix<T> A = bgm_A.glob_mat;
+
+    SparseLU<SparseMatrix<T>>  solver;
+    solver.analyzePattern(M);
+    solver.factorize(M);
+    std::cout << "start inverting mass matrix ..." << std::endl;
+    SparseMatrix<T> M_inv_At = solver.solve(A.transpose());
+    std::cout << "   ... done" << std::endl;
+    // auto B = A * M_inv_At;
 }
 
 
@@ -628,6 +640,11 @@ public:
             }
         }
 
+    void add_one_diag(void)
+        {
+            triplets.push_back( Triplet<T>(system_size, system_size, 1.0 ) );
+        }
+    
     void finalize(void)
         {
             glob_mat.setFromTriplets( triplets.begin(), triplets.end() );
@@ -5738,7 +5755,7 @@ int main(int argc, char **argv)
         output_mesh_info(msh, level_set_function);
     }
 
-#if 0
+#if 1
     compute_inf_sup(msh, level_set_function, degree);
     
 #else
