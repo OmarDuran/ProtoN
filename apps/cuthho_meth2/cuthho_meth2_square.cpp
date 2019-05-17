@@ -1479,6 +1479,17 @@ static_condensation_recover(const Matrix<T, Dynamic, Dynamic> lhs, const Matrix<
 
 
 ///////////////////////////////   TESTS    //////////////////////////////
+template<typename T>
+class test_info {
+public:
+    test_info()
+        {
+            H1 = 0.0;
+            L2 = 0.0;
+        }
+    T H1;
+    T L2;
+};
 
 
 template<typename T>
@@ -3019,7 +3030,7 @@ compute_interface_contrib(const cuthho_mesh<T, ET>& msh,
 
 
 template<typename Mesh, typename Function>
-void
+test_info<typename Mesh::coordinate_type>
 run_cuthho_interface(const Mesh& msh, const Function& level_set_function, size_t degree,
                      size_t method)
 {
@@ -3481,6 +3492,12 @@ run_cuthho_interface(const Mesh& msh, const Function& level_set_function, size_t
     tc.toc();
     std::cout << bold << yellow << "Postprocessing: " << tc << " seconds" << reset << std::endl;
 
+
+    test_info<RealType> TI;
+    TI.H1 = std::sqrt(H1_error);
+    TI.L2 = std::sqrt(L2_error);
+
+    return TI;
 }
 
 
@@ -3569,12 +3586,122 @@ test_interface_gr(const Mesh& msh, const Function& level_set_function, size_t de
 
 
 
+/////////////////////////   AUTOMATIC TESTS  //////////////////////////
 
 
+void convergence_test(void)
+{
+    using T = double;
+
+    std::vector<size_t> mesh_sizes, pol_orders;
+
+    // meshes
+    mesh_sizes.push_back(8);
+    mesh_sizes.push_back(16);
+    mesh_sizes.push_back(32);
+    mesh_sizes.push_back(64);
+    mesh_sizes.push_back(128);
+
+    // polynomial orders
+    pol_orders.push_back(0);
+    pol_orders.push_back(1);
+    pol_orders.push_back(2);
+    pol_orders.push_back(3);
 
 
+    // export to files ...
+    std::vector<std::string> files;
+    files.push_back("./output/test_k0.txt");
+    files.push_back("./output/test_k1.txt");
+    files.push_back("./output/test_k2.txt");
+    files.push_back("./output/test_k3.txt");
+
+    for (std::vector<size_t>::iterator it = pol_orders.begin(); it != pol_orders.end(); it++)
+    {
+        size_t k = *it;
+
+        std::cout << "start tests for k = " << k << std::endl;
+
+        // init the file
+        std::ofstream output;
+        output.open (files.at(*it), std::ios::in | std::ios::trunc);
+        if (!output.is_open())
+            throw std::logic_error("file not open");
+
+        output << "N\th\tH1\tordre1\tL2\tordre2" << std::endl;
+
+        // convergence tests
+        T previous_H1 = 0.0;
+        T previous_L2 = 0.0;
+        T previous_h = 0.0;
+        for (std::vector<size_t>::iterator it_msh = mesh_sizes.begin();
+             it_msh != mesh_sizes.end(); it_msh++)
+        {
+            size_t N = *it_msh;
+
+            // init mesh (with agglomeration)
+            mesh_init_params<T> mip;
+            mip.Nx = N;
+            mip.Ny = N;
+            cuthho_poly_mesh<T> msh(mip);
+            size_t int_refsteps = 4;
+            T radius = 1.0/3.0;
+            auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
+            detect_node_position(msh, level_set_function);
+            detect_cut_faces(msh, level_set_function);
+            detect_cut_cells(msh, level_set_function);
+            detect_cell_agglo_set(msh, level_set_function);
+            make_neighbors_info_cartesian(msh);
+            refine_interface(msh, level_set_function, int_refsteps);
+            make_agglomeration(msh, level_set_function);
 
 
+            // compute solution/errors
+            auto TI = run_cuthho_interface(msh, level_set_function, k, 3);
+
+            // report info in the file
+            T h = 1.0/N;
+            if (it_msh == mesh_sizes.begin())
+            {
+                output << N << "\t" << h << "\t" << TI.H1 << "\t" << "."
+                       << "\t" << TI.L2 << "\t" << "."
+                       << std::endl;
+            }
+            else
+            {
+                T orderH = log(previous_H1 / TI.H1) / log(previous_h / h);
+                T orderL = log(previous_L2 / TI.L2) / log(previous_h / h);
+                output << N << "\t" << h << "\t" << TI.H1 << "\t" << orderH
+                       << "\t" << TI.L2 << "\t" << orderL
+                       << std::endl;
+            }
+            previous_H1 = TI.H1;
+            previous_L2 = TI.L2;
+            previous_h = h;
+        }
+        // close the file
+        output.close();
+    }
+
+    // update the gnuplot curves
+    system("gnuplot './output/gnuplot_script.txt'");
+
+    // update the .pdf file
+    system("pdflatex ./output/autom_tests.tex");
+
+    // open the .pdf file
+    system("xdg-open ./autom_tests.pdf");
+}
+
+//////////////////////////     MAIN        ////////////////////////////
+int main(int argc, char **argv)
+{
+    convergence_test();
+    return 1;
+}
+
+
+#if 0
 int main(int argc, char **argv)
 {
     using RealType = double;
@@ -3779,3 +3906,4 @@ int main(int argc, char **argv)
 
     return 0;
 }
+#endif
