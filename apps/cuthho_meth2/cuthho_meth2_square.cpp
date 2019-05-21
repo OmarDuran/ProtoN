@@ -124,6 +124,78 @@ struct line_level_set
 };
 
 
+
+template<typename T>
+struct carre_level_set
+{
+    T y_top, y_bot, x_left, x_right;
+
+    carre_level_set(T yt, T yb, T xl, T xr)
+        : y_top(yt), y_bot(yb), x_left(xl), x_right(xr)
+    {}
+
+    T operator()(const point<T,2>& pt) const
+    {
+        auto x = pt.x();
+        auto y = pt.y();
+
+        T in = 1;
+        if(x > x_left && x < x_right && y > y_bot && y < y_top)
+            in = 1;
+        else
+            in = -1;
+
+        T dist_x = std::min( abs(x-x_left), abs(x-x_right));
+        T dist_y = std::min( abs(y-y_bot), abs(y-y_top));
+
+        
+        return - in * std::min(dist_x , dist_y);
+    }
+
+    Eigen::Matrix<T,2,1> gradient(const point<T,2>& pt) const
+    {
+        Eigen::Matrix<T,2,1> ret;
+        
+
+        auto x = pt.x();
+        auto y = pt.y();
+
+        T dist = abs(x - x_left);
+        ret(0) = -1;
+        ret(1) = 0;
+        
+        if(abs(x - x_right) < dist )
+        {
+            dist = abs(x - x_right);
+            ret(0) = 1;
+            ret(1) = 0;
+        }
+        if(abs(y - y_bot) < dist )
+        {
+            dist = abs(y - y_bot);
+            ret(0) = 0;
+            ret(1) = -1;
+        }
+        if(abs(y - y_top) < dist)
+        {
+            ret(0) = 0;
+            ret(1) = 1;
+        }
+        
+        return ret;
+    }
+
+    Eigen::Matrix<T,2,1> normal(const point<T,2>& pt) const
+    {
+        Eigen::Matrix<T,2,1> ret;
+
+        ret = gradient(pt);
+        return ret/ret.norm();        
+    }
+
+};
+
+
 /*****************************************************************************
  *   Test stuff
  *****************************************************************************/
@@ -3075,6 +3147,45 @@ run_cuthho_interface(const Mesh& msh, const Function& level_set_function, size_t
     parms.kappa_1 = 1.0;
     parms.kappa_2 = 1.0;
 
+
+#elif 1 // test case 1 bis : another domain decomposition
+    auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
+        return 0.0;
+    };
+    auto sol_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
+        return exp(pt.x()) * std::cos(pt.y());
+    };
+
+    auto sol_grad = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        Matrix<RealType, 1, 2> ret;
+
+        ret(0) = exp(pt.x()) * std::cos(pt.y());
+        ret(1) = - exp(pt.x()) * std::sin(pt.y());
+
+        return ret;
+    };
+
+    auto bcs_fun = [&](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
+        return sol_fun(pt);
+    };
+
+
+    auto dirichlet_jump = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
+        return 0.0;
+    };
+
+    auto neumann_jump = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
+        return 0.0;
+    };
+
+    
+    struct params<RealType> parms;
+
+    parms.kappa_1 = 1.0;
+    parms.kappa_2 = 1.0;
+
+
+    
 #elif 0 // test case 2 : a constrast problem
 
     struct params<RealType> parms;
@@ -3192,7 +3303,7 @@ run_cuthho_interface(const Mesh& msh, const Function& level_set_function, size_t
         return 0.0;
     };
 
-#elif 1 // test case 4 : a jump problem
+#elif 0 // test case 4 : a jump problem
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
         RealType r2 = (pt.x() - 0.5) * (pt.x() - 0.5) + (pt.y() - 0.5) * (pt.y() - 0.5);
         if(r2 < 1.0/9) {
@@ -3628,7 +3739,8 @@ void convergence_test(void)
         if (!output.is_open())
             throw std::logic_error("file not open");
 
-        output << "N\th\tH1\tordre1\tL2\tordre2" << std::endl;
+        // output << "N\th\tH1\tordre1\tL2\tordre2" << std::endl;
+        output << "N\th\tH1\tordre1\tL2\tordre2\tcond" << std::endl;
 
         // convergence tests
         T previous_H1 = 0.0;
@@ -3646,7 +3758,8 @@ void convergence_test(void)
             cuthho_poly_mesh<T> msh(mip);
             size_t int_refsteps = 4;
             T radius = 1.0/3.0;
-            auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
+            // auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
+            auto level_set_function = carre_level_set<T>(1.05, -0.05, -0.05, 1.05);
             detect_node_position(msh, level_set_function);
             detect_cut_faces(msh, level_set_function);
             detect_cut_cells(msh, level_set_function);
@@ -3663,16 +3776,22 @@ void convergence_test(void)
             T h = 1.0/N;
             if (it_msh == mesh_sizes.begin())
             {
+                // output << N << "\t" << h << "\t" << TI.H1 << "\t" << "."
+                //        << "\t" << TI.L2 << "\t" << "."
+                //        << std::endl;
                 output << N << "\t" << h << "\t" << TI.H1 << "\t" << "."
-                       << "\t" << TI.L2 << "\t" << "."
+                       << "\t" << TI.L2 << "\t" << "." << "\t" << "0.0"
                        << std::endl;
             }
             else
             {
                 T orderH = log(previous_H1 / TI.H1) / log(previous_h / h);
                 T orderL = log(previous_L2 / TI.L2) / log(previous_h / h);
+                // output << N << "\t" << h << "\t" << TI.H1 << "\t" << orderH
+                //        << "\t" << TI.L2 << "\t" << orderL
+                //        << std::endl;
                 output << N << "\t" << h << "\t" << TI.H1 << "\t" << orderH
-                       << "\t" << TI.L2 << "\t" << orderL
+                       << "\t" << TI.L2 << "\t" << orderL << "\t" << "0.0"
                        << std::endl;
             }
             previous_H1 = TI.H1;
