@@ -1612,7 +1612,7 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
             if( old_cells[offset1] == old_cells[offset2] )
                 continue;
 
-            std::vector<size_t> cells_agglo;
+            std::vector<int> cells_agglo;
             if (old_cells[offset1] != -1)
             {
                 cl = new_cells[ old_cells[offset1] ];
