@@ -694,7 +694,7 @@ make_hho_laplacian(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, 
         }
     }
 
-    Matrix<T, Dynamic, Dynamic> oper = gr_lhs.llt().solve(gr_rhs);
+    Matrix<T, Dynamic, Dynamic> oper = gr_lhs.ldlt().solve(gr_rhs);
     Matrix<T, Dynamic, Dynamic> data = gr_rhs.transpose() * oper;
     return std::make_pair(oper, data);
 }
@@ -1196,7 +1196,7 @@ make_hho_cut_stabilization(const cuthho_mesh<T, ET>& msh,
         if (qps.size() == 0) /* Avoid to invert a zero matrix */
             continue;
 
-        oper.block(0, 0, fbs, cbs) = mass.llt().solve(trace);
+        oper.block(0, 0, fbs, cbs) = mass.ldlt().solve(trace);
 
         data += oper.transpose() * mass * oper * (1./hT);
     }
@@ -1700,8 +1700,249 @@ public:
     }
 };
 
+
+
+
+
+
+
+
+template<typename Mesh>
+class fict_condensed_assembler
+{
+    using T = typename Mesh::coordinate_type;
+    std::vector<size_t>                 compress_table;
+    std::vector<size_t>                 expand_table;
+
+    hho_degree_info                     di;
+
+    std::vector< Triplet<T> >           triplets;
+
+    element_location loc_zone;
+
+    class assembly_index
+    {
+        size_t  idx;
+        bool    assem;
+
+    public:
+        assembly_index(size_t i, bool as)
+            : idx(i), assem(as)
+        {}
+
+        operator size_t() const
+        {
+            if (!assem)
+                throw std::logic_error("Invalid assembly_index");
+
+            return idx;
+        }
+
+        bool assemble() const
+        {
+            return assem;
+        }
+
+        friend std::ostream& operator<<(std::ostream& os, const assembly_index& as)
+        {
+            os << "(" << as.idx << "," << as.assem << ")";
+            return os;
+        }
+    };
+
+public:
+
+    SparseMatrix<T>         LHS;
+    Matrix<T, Dynamic, 1>   RHS;
+
+    fict_condensed_assembler(const Mesh& msh, hho_degree_info hdi, element_location where)
+        : di(hdi), loc_zone(where)
+    {
+        auto is_removed = [&](const typename Mesh::face_type& fc) -> bool {
+            bool is_dirichlet = fc.is_boundary && fc.bndtype == boundary::DIRICHLET;
+            auto loc = location(msh,fc);
+            bool is_where = (loc == where || loc == element_location::ON_INTERFACE);
+            return is_dirichlet || (!is_where);
+        };
+
+        auto num_all_faces = msh.faces.size();
+        auto num_removed_faces = std::count_if(msh.faces.begin(), msh.faces.end(), is_removed);
+        auto num_other_faces = num_all_faces - num_removed_faces;
+
+        compress_table.resize( num_all_faces );
+        expand_table.resize( num_other_faces );
+
+        size_t compressed_offset = 0;
+        for (size_t i = 0; i < num_all_faces; i++)
+        {
+            auto fc = msh.faces[i];
+            if ( !is_removed(fc) )
+            {
+                compress_table.at(i) = compressed_offset;
+                expand_table.at(compressed_offset) = i;
+                compressed_offset++;
+            }
+        }
+
+        auto facdeg = di.face_degree();
+        auto fbs = face_basis<Mesh,T>::size(facdeg);
+
+        auto system_size = fbs * num_other_faces;
+
+        LHS = SparseMatrix<T>( system_size, system_size );
+        RHS = Matrix<T, Dynamic, 1>::Zero( system_size );
+    }
+
+    void dump_tables() const
+    {
+        std::cout << "Compress table: " << std::endl;
+        for (size_t i = 0; i < compress_table.size(); i++)
+            std::cout << i << " -> " << compress_table.at(i) << std::endl;
+    }
+
+    template<typename Function>
+    void
+    assemble(const Mesh& msh, const typename Mesh::cell_type& cl,
+             const Matrix<T, Dynamic, Dynamic>& lhs, const Matrix<T, Dynamic, 1>& rhs,
+             const Function& dirichlet_bf)
+    {
+        auto celdeg = di.cell_degree();
+        auto facdeg = di.face_degree();
+
+        auto cbs = cell_basis<Mesh,T>::size(celdeg);
+        auto fbs = face_basis<Mesh,T>::size(facdeg);
+
+        auto fcs = faces(msh, cl);
+        auto num_faces = fcs.size();
+        size_t f_dofs = num_faces * fbs;
+
+        // static condensation
+        auto mat_sc = static_condensation_compute(lhs, rhs, cbs, f_dofs);
+        Matrix<T, Dynamic, Dynamic> lhs_sc = mat_sc.first;
+        Matrix<T, Dynamic, 1> rhs_sc = mat_sc.second;
+
+        std::vector<assembly_index> asm_map;
+        asm_map.reserve(f_dofs);
+
+        Matrix<T, Dynamic, 1> dirichlet_data = Matrix<T, Dynamic, 1>::Zero(f_dofs);
+
+        for (size_t face_i = 0; face_i < num_faces; face_i++)
+        {
+            auto fc = fcs[face_i];
+            auto face_offset = offset(msh, fc);
+            auto face_LHS_offset = compress_table.at(face_offset) * fbs;
+
+            bool dirichlet = fc.is_boundary && fc.bndtype == boundary::DIRICHLET;
+
+            auto loc = location(msh, fc);
+            bool is_where = (loc == loc_zone) || (loc == element_location::ON_INTERFACE);
+
+            for (size_t i = 0; i < fbs; i++)
+                asm_map.push_back( assembly_index(face_LHS_offset+i, !dirichlet && is_where) );
+
+            if (dirichlet)
+            {
+                Matrix<T, Dynamic, Dynamic> mass = make_mass_matrix(msh, fc, facdeg);
+                Matrix<T, Dynamic, 1> loc_rhs = make_rhs(msh, fc, facdeg, dirichlet_bf);
+                dirichlet_data.block(face_i*fbs, 0, fbs, 1) = mass.llt().solve(loc_rhs);
+            }
+        }
+
+        assert( asm_map.size() == lhs_sc.rows() && asm_map.size() == lhs_sc.cols() );
+
+        for (size_t i = 0; i < lhs_sc.rows(); i++)
+        {
+            if (!asm_map[i].assemble())
+                continue;
+
+            for (size_t j = 0; j < lhs_sc.cols(); j++)
+            {
+                if ( asm_map[j].assemble() )
+                    triplets.push_back( Triplet<T>(asm_map[i], asm_map[j], lhs_sc(i,j)) );
+                else
+                    RHS(asm_map[i]) -= lhs_sc(i,j)*dirichlet_data(j);
+            }
+        }
+
+        //RHS
+        for (size_t face_i = 0; face_i < num_faces; face_i++)
+        {
+            auto fc = fcs[face_i];
+            auto face_offset = offset(msh, fc);
+            auto face_LHS_offset = compress_table.at(face_offset) * fbs;
+
+            RHS.block(face_LHS_offset, 0, fbs, 1) += rhs_sc.block(face_i*fbs, 0, fbs, 1);
+        }
+
+    } // assemble()
+
+    template<typename Function>
+    Matrix<T, Dynamic, 1>
+    take_local_data(const Mesh& msh, const typename Mesh::cell_type& cl,
+                    const Matrix<T, Dynamic, 1>& solution, const Function& dirichlet_bf,
+                    const Matrix<T, Dynamic, Dynamic> loc_mat, const Matrix<T, Dynamic, 1> loc_rhs)
+    {
+        auto celdeg = di.cell_degree();
+        auto facdeg = di.face_degree();
+
+        auto cbs = cell_basis<Mesh,T>::size(celdeg);
+        auto fbs = face_basis<Mesh,T>::size(facdeg);
+
+        auto fcs = faces(msh, cl);
+        auto num_faces = fcs.size();
+        size_t f_dofs = num_faces*fbs;
+
+
+        Matrix<T, Dynamic, 1> solF = Matrix<T, Dynamic, 1>::Zero(f_dofs);
+
+        for (size_t face_i = 0; face_i < num_faces; face_i++)
+        {
+            auto fc = fcs[face_i];
+
+            bool dirichlet = fc.is_boundary && fc.bndtype == boundary::DIRICHLET;
+
+            if (dirichlet)
+            {
+                Matrix<T, Dynamic, Dynamic> mass = make_mass_matrix(msh, fc, facdeg);
+                Matrix<T, Dynamic, 1> rhs = make_rhs(msh, fc, facdeg, dirichlet_bf);
+                solF.block(face_i*fbs, 0, fbs, 1) = mass.llt().solve(rhs);
+            }
+            else
+            {
+                auto face_offset = offset(msh, fc);
+                auto face_SOL_offset = compress_table.at(face_offset)*fbs;
+                solF.block(face_i*fbs, 0, fbs, 1) = solution.block(face_SOL_offset, 0, fbs, 1);
+            }
+        }
+
+        // Recover the full solution
+        return static_condensation_recover(loc_mat, loc_rhs, cbs, f_dofs, solF);
+    }
+
+    void finalize(void)
+    {
+        LHS.setFromTriplets( triplets.begin(), triplets.end() );
+        triplets.clear();
+    }
+};
+
+
+template<typename Mesh>
+auto make_fict_condensed_assembler(const Mesh& msh, hho_degree_info hdi, element_location where)
+{
+    return fict_condensed_assembler<Mesh>(msh, hdi, where);
+}
+
+
+
+
+
+
+
+
+
 template<typename Mesh, typename Function>
-void
+test_info<typename Mesh::coordinate_type>
 run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t degree)
 {
     using RealType = typename Mesh::coordinate_type;
@@ -1740,6 +1981,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
 
     /************** DEFINE PROBLEM RHS, SOLUTION AND BCS **************/
+#if 1
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
         return 2.0 * M_PI * M_PI * std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());
     };
@@ -1761,8 +2003,32 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         return sol_fun(pt);
     };
 
+#elif 0
+    auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
+        return 0.0;
+    };
+
+    auto sol_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
+        return exp(pt.x()) * std::cos(pt.y());
+    };
+
+    auto sol_grad = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
+        Matrix<RealType, 1, 2> ret;
+
+        ret(0) = exp(pt.x()) * std::cos(pt.y());
+        ret(1) = - exp(pt.x()) * std::sin(pt.y());
+
+        return ret;
+    };
+
+    auto bcs_fun = [&](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
+        return sol_fun(pt);
+    };
+#endif
 
     timecounter tc;
+
+    bool sc = true; // static condensation
 
     /************** ASSEMBLE PROBLEM **************/
     hho_degree_info hdi(degree+1, degree);
@@ -1777,6 +2043,8 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
     tc.tic();
     auto assembler = make_assembler(msh, hdi);
+    auto assembler_sc = make_fict_condensed_assembler(msh, hdi, where);
+
     for (auto& cl : msh.cells)
     {
         if ( false && !cl.user_data.distorted && location(msh, cl) != element_location::ON_INTERFACE )
@@ -1792,37 +2060,67 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
             Matrix<RealType, Dynamic, Dynamic> lc = gr.second + stab;
             Matrix<RealType, Dynamic, 1> f = Matrix<RealType, Dynamic, 1>::Zero(lc.rows());
             f = make_rhs(msh, cl, hdi.cell_degree(), rhs_fun, where, level_set_function, bcs_fun, gr.first);
-            assembler.assemble(msh, cl, lc, f, bcs_fun);
+            if( sc )
+                assembler_sc.assemble(msh, cl, lc, f, bcs_fun);
+            else
+                assembler.assemble(msh, cl, lc, f, bcs_fun);
         }
     }
 
-    assembler.finalize();
+    if( sc )
+        assembler_sc.finalize();
+    else
+        assembler.finalize();
 
     tc.toc();
     std::cout << bold << yellow << "Matrix assembly: " << tc << " seconds" << reset << std::endl;
 
-    std::cout << "System unknowns: " << assembler.LHS.rows() << std::endl;
+    if( sc )
+        std::cout << "System unknowns: " << assembler_sc.LHS.rows() << std::endl;
+    else
+        std::cout << "System unknowns: " << assembler.LHS.rows() << std::endl;
+
     std::cout << "Cells: " << msh.cells.size() << std::endl;
     std::cout << "Faces: " << msh.faces.size() << std::endl;
 
 
     /************** SOLVE **************/
     tc.tic();
-//#if 0
-    SparseLU<SparseMatrix<RealType>>  solver;
-
-    solver.analyzePattern(assembler.LHS);
-    solver.factorize(assembler.LHS);
-    Matrix<RealType, Dynamic, 1> sol = solver.solve(assembler.RHS);
-//#endif
 #if 0
-    Matrix<RealType, Dynamic, 1> sol = Matrix<RealType, Dynamic, 1>::Zero(assembler.RHS.rows());
+    SparseLU<SparseMatrix<RealType>>  solver;
+    Matrix<RealType, Dynamic, 1> sol;
+
+    if( sc )
+    {
+        solver.analyzePattern(assembler_sc.LHS);
+        solver.factorize(assembler_sc.LHS);
+        sol = solver.solve(assembler_sc.RHS);
+    }
+    else
+    {
+        solver.analyzePattern(assembler.LHS);
+        solver.factorize(assembler.LHS);
+        sol = solver.solve(assembler.RHS);
+    }
+#endif
+#if 1
+    Matrix<RealType, Dynamic, 1> sol;
     cg_params<RealType> cgp;
-    cgp.max_iter = assembler.LHS.rows();
     cgp.histfile = "cuthho_cg_hist.dat";
     cgp.verbose = true;
     cgp.apply_preconditioner = true;
-    conjugated_gradient(assembler.LHS, assembler.RHS, sol, cgp);
+    if( sc )
+    {
+        sol = Matrix<RealType, Dynamic, 1>::Zero(assembler_sc.RHS.rows());
+        cgp.max_iter = assembler_sc.LHS.rows();
+        conjugated_gradient(assembler_sc.LHS, assembler_sc.RHS, sol, cgp);
+    }
+    else
+    {
+        sol = Matrix<RealType, Dynamic, 1>::Zero(assembler.RHS.rows());
+        cgp.max_iter = assembler.LHS.rows();
+        conjugated_gradient(assembler.LHS, assembler.RHS, sol, cgp);
+    }
 #endif
     tc.toc();
     std::cout << bold << yellow << "Linear solver: " << tc << " seconds" << reset << std::endl;
@@ -1839,11 +2137,11 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     auto diff_gp  = std::make_shared< gnuplot_output_object<RealType> >("fictdom_diff.dat");
 
 
-    std::vector<RealType>   solution_uT, solution_Ru, eigval_data;
+    std::vector<RealType>   solution_uT, eigval_data;
 
     tc.tic();
     RealType    H1_error = 0.0;
-    RealType    H1_sol_norm = 0.0;
+    RealType    L2_error = 0.0;
     size_t      cell_i   = 0;
     for (auto& cl : msh.cells)
     {
@@ -1853,14 +2151,21 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         
         cell_basis<cuthho_poly_mesh<RealType>, RealType> cb(msh, cl, hdi.cell_degree());
         auto cbs = cb.size();
+
+        Matrix<RealType, Dynamic, 1> locdata;
+        if( sc )
+        {
+            auto gr = make_hho_gradrec_vector(msh, cl, level_set_function, hdi, where);
+            Matrix<RealType, Dynamic, Dynamic> stab = make_hho_cut_stabilization(msh, cl, hdi, where);            
+            Matrix<RealType, Dynamic, Dynamic> lc = gr.second + stab;
+            Matrix<RealType, Dynamic, 1> f = Matrix<RealType, Dynamic, 1>::Zero(lc.rows());
+            f = make_rhs(msh, cl, hdi.cell_degree(), rhs_fun, where, level_set_function, bcs_fun, gr.first);
+            locdata = assembler_sc.take_local_data(msh, cl, sol, sol_fun, lc, f);
+        }
+        else
+            locdata = assembler.take_local_data(msh, cl, sol, sol_fun);
         
-        cell_basis<cuthho_poly_mesh<RealType>, RealType> rb(msh, cl, hdi.reconstruction_degree());
-        auto rbs = rb.size();
-        
-        auto gr = make_hho_laplacian(msh, cl, level_set_function, hdi, where);
-        Matrix<RealType, Dynamic, 1> locdata = assembler.take_local_data(msh, cl, sol, sol_fun);
         Matrix<RealType, Dynamic, 1> cell_dofs = locdata.head(cbs);
-        Matrix<RealType, Dynamic, 1> rec_dofs = gr.first * locdata;
         
         auto bar = barycenter(msh, cl, element_location::IN_NEGATIVE_SIDE);
         
@@ -1868,69 +2173,15 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         auto c_val = cell_dofs.dot( c_phi );
         solution_uT.push_back(c_val);
         
-        Matrix<RealType, Dynamic, 1> r_phi = rb.eval_basis(bar);
-        RealType r_val;
-        
-        if ( is_cut(msh, cl) )
-            r_val = rec_dofs.head(rbs).dot( r_phi );
-        else
-            r_val = rec_dofs.dot( r_phi.tail(rbs-1) ) + locdata(0);
-        
-        solution_Ru.push_back(r_val);
-        
-        /*
-        if ( location(msh, cl) != element_location::IN_POSITIVE_SIDE )
-        {
-            Matrix<RealType, Dynamic, 1> proj = project_function(msh, cl, hdi, element_location::IN_NEGATIVE_SIDE, sol_fun);
-
-            Matrix<RealType, Dynamic, 1> comp = Matrix<RealType, Dynamic, 1>::Zero(rbs);
-
-            if ( is_cut(msh, cl) )
-            {
-                comp = rec_dofs.transpose().head(rbs);
-                std::cout << green << "CUT CELL" << std::endl;
-            }
-            else
-            {
-                comp.tail(rbs-1) = rec_dofs.transpose();
-                comp(0) = locdata(0);
-                std::cout << green << "REGULAR CELL" << std::endl;
-            }
-
-            Matrix<RealType, Dynamic, 1> abserr = Matrix<RealType, Dynamic, 1>::Zero(rbs);
-
-            for (size_t i = 0; i < rbs; i++)
-                abserr(i) = 100*std::abs(proj.transpose().head(cbs)(i) - comp(i))/std::abs(proj.transpose().head(cbs)(i));
-
-            std::cout << magenta << proj.transpose().head(cbs) << nocolor << std::endl;
-            std::cout << red << comp.transpose() << nocolor << std::endl;
-            std::cout << yellow << abserr.transpose() << nocolor << std::endl;
-        }
-        */
-
-        //auto tps = make_test_points(msh, cl, level_set_function, element_location::IN_NEGATIVE_SIDE);
-
-        
         auto qps = integrate(msh, cl, 5, element_location::IN_NEGATIVE_SIDE);
         if ( !hide_fict_dom ) qps = integrate(msh, cl, 5/*, element_location::IN_NEGATIVE_SIDE*/);
         
         for (auto& qp : qps)
         {
             auto tp = qp.first;
-            auto t_phi = rb.eval_basis( tp );
+            auto t_phi = cb.eval_basis( tp );
 
             uT_gp->add_data( tp, cell_dofs.dot(t_phi) );
-
-            RealType Ru_val;
-
-            if ( is_cut(msh, cl) )
-                Ru_val = rec_dofs.head(rbs).dot( t_phi );
-            else
-                Ru_val = rec_dofs.dot( t_phi.tail(rbs-1) ) + locdata(0);
-
-            Ru_gp->add_data( tp, Ru_val );
-
-            diff_gp->add_data( tp, std::abs(Ru_val - sol_fun(tp))*100.0/sol_fun(tp) );
         }
 
         if ( location(msh, cl) == element_location::IN_NEGATIVE_SIDE ||
@@ -1942,26 +2193,23 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
             for (auto& qp : qps)
             {
                 /* Compute H1-error */
-                auto t_dphi = rb.eval_gradients( qp.first );
+                auto t_dphi = cb.eval_gradients( qp.first );
                 Matrix<RealType, 1, 2> grad = Matrix<RealType, 1, 2>::Zero();
 
-                for (size_t i = 1; i < rbs; i++ )
+                for (size_t i = 1; i < cbs; i++ )
                     grad += cell_dofs(i) * t_dphi.block(i, 0, 1, 2);
 
                 H1_error += qp.second * (sol_grad(qp.first) - grad).dot(sol_grad(qp.first) - grad);
 
+
+
+                auto t_phi = cb.eval_basis( qp.first );
+                auto v = cell_dofs.dot(t_phi);
+                L2_error += qp.second * (sol_fun(qp.first) - v) * (sol_fun(qp.first) - v);
+
                 int_gp->add_data( qp.first, 1.0 );
             }
         }
-
-
-         Matrix<RealType, Dynamic, 1> eigs = check_eigs(msh, cl, level_set_function, hdi, where);
-         RealType min_eig = eigs(0);
-         for (size_t i = 1; i < eigs.size(); i++)
-            min_eig = std::min(min_eig, eigs(i));
-
-        eigval_data.push_back(min_eig);
-
 
         cell_i++;
     }
@@ -1974,14 +2222,16 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     postoutput.add_object(int_gp);
     postoutput.write();
 
-
-    silo.add_variable("mesh", "min_eig", eigval_data.data(), eigval_data.size(), zonal_variable_t);
     silo.add_variable("mesh", "uT", solution_uT.data(), solution_uT.size(), zonal_variable_t);
-    silo.add_variable("mesh", "Ru", solution_Ru.data(), solution_Ru.size(), zonal_variable_t);
+
+    test_info<RealType> TI;
+    TI.H1 = std::sqrt(H1_error);
+    TI.L2 = std::sqrt(L2_error);
 
     tc.toc();
     std::cout << bold << yellow << "Postprocessing: " << tc << " seconds" << reset << std::endl;
 
+    return TI;
 }
 
 
@@ -2149,7 +2399,7 @@ public:
             {
                 Matrix<T, Dynamic, Dynamic> mass = make_mass_matrix(msh, fc, facdeg);
                 Matrix<T, Dynamic, 1> rhs = make_rhs(msh, fc, facdeg, dirichlet_bf);
-                dirichlet_data.block(cbs+face_i*fbs, 0, fbs, 1) = mass.llt().solve(rhs);
+                dirichlet_data.block(cbs+face_i*fbs, 0, fbs, 1) = mass.ldlt().solve(rhs);
             }
         }
 
@@ -2345,7 +2595,7 @@ public:
             {
                 Matrix<T, Dynamic, Dynamic> mass = make_mass_matrix(msh, fc, facdeg);
                 Matrix<T, Dynamic, 1> rhs = make_rhs(msh, fc, facdeg, dirichlet_bf);
-                ret.block(cbs+face_i*fbs, 0, fbs, 1) = mass.llt().solve(rhs);
+                ret.block(cbs+face_i*fbs, 0, fbs, 1) = mass.ldlt().solve(rhs);
             }
             else
             {
@@ -2513,8 +2763,8 @@ public:
             if (dirichlet)
             {
                 Matrix<T, Dynamic, Dynamic> mass = make_mass_matrix(msh, fc, facdeg);
-                Matrix<T, Dynamic, 1> rhs = make_rhs(msh, fc, facdeg, dirichlet_bf);
-                dirichlet_data.block(face_i*fbs, 0, fbs, 1) = mass.llt().solve(rhs);
+                Matrix<T, Dynamic, 1> rhs_loc = make_rhs(msh, fc, facdeg, dirichlet_bf);
+                dirichlet_data.block(face_i*fbs, 0, fbs, 1) = mass.ldlt().solve(rhs_loc);
             }
         }
 
@@ -2696,7 +2946,7 @@ public:
             {
                 Matrix<T, Dynamic, Dynamic> mass = make_mass_matrix(msh, fc, facdeg);
                 Matrix<T, Dynamic, 1> rhs = make_rhs(msh, fc, facdeg, dirichlet_bf);
-                solF.block(face_i*fbs, 0, fbs, 1) = mass.llt().solve(rhs);
+                solF.block(face_i*fbs, 0, fbs, 1) = mass.ldlt().solve(rhs);
                 continue;
             }
 
@@ -3756,10 +4006,12 @@ void convergence_test(void)
             mip.Nx = N;
             mip.Ny = N;
             cuthho_poly_mesh<T> msh(mip);
-            size_t int_refsteps = 4;
+            size_t int_refsteps = 2;
             T radius = 1.0/3.0;
-            // auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
-            auto level_set_function = carre_level_set<T>(1.05, -0.05, -0.05, 1.05);
+            auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
+            // auto level_set_function = carre_level_set<T>(1.05, -0.05, -0.05, 1.05);
+            // auto level_set_function = carre_level_set<T>(1.0, -0.0, -0.0, 1.0);
+            // auto level_set_function = carre_level_set<T>(0.77, 0.23, 0.23, 0.77);
             detect_node_position(msh, level_set_function);
             detect_cut_faces(msh, level_set_function);
             detect_cut_cells(msh, level_set_function);
@@ -3771,6 +4023,8 @@ void convergence_test(void)
 
             // compute solution/errors
             auto TI = run_cuthho_interface(msh, level_set_function, k, 3);
+            // auto TI = run_cuthho_fictdom(msh, level_set_function, k);
+
 
             // report info in the file
             T h = 1.0/N;
