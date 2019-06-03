@@ -503,6 +503,7 @@ void test_projection(const Mesh& msh, const Function& level_set_function, size_t
     T H1_error_cut = 0.0;
     T L2_error_uncut = 0.0;
     T L2_error_cut = 0.0;
+    T interface_L2_error = 0.0;
 
     size_t proj_degree = degree + 1;
     auto cbs = cell_basis<Mesh, T>::size(proj_degree);
@@ -565,6 +566,16 @@ void test_projection(const Mesh& msh, const Function& level_set_function, size_t
                 auto v = U.dot(t_phi);
                 L2_error_cut += qp.second * (ref_fun(qp.first) - v) * (ref_fun(qp.first) - v);
             }
+
+            auto qps_int = integrate_interface(msh, cl, 2*proj_degree,
+                                               element_location::IN_NEGATIVE_SIDE);
+            for (auto& qp : qps_int)
+            {
+                // L2_error
+                auto t_phi = cb.eval_basis( qp.first );
+                auto v = U.dot(t_phi);
+                interface_L2_error += qp.second * (ref_fun(qp.first) - v) * (ref_fun(qp.first) - v);
+            }
         }
         else
         {
@@ -596,6 +607,7 @@ void test_projection(const Mesh& msh, const Function& level_set_function, size_t
     std::cout << bold << green << "CUT cells: " << std::endl;
     std::cout << bold << green << "Energy-norm absolute error:           " << std::sqrt(H1_error_cut) << std::endl;
     std::cout << bold << green << "L2-norm absolute error:           " << std::sqrt(L2_error_cut) << std::endl;
+    std::cout << bold << red << "L2-norm absolute error on interface :           " << std::sqrt(interface_L2_error) << std::endl;
 }
 
 
@@ -4067,12 +4079,13 @@ void convergence_test(void)
 }
 
 //////////////////////////     MAIN        ////////////////////////////
+#if 1
 int main(int argc, char **argv)
 {
     convergence_test();
     return 1;
 }
-
+#endif
 
 #if 0
 int main(int argc, char **argv)
@@ -4205,6 +4218,7 @@ int main(int argc, char **argv)
         dump_mesh(msh);
         test_triangulation(msh);
         output_mesh_info(msh, level_set_function);
+        test_projection(msh, level_set_function, degree);
     }
 
     if (solve_interface)
