@@ -276,12 +276,30 @@ public:
         auto dot = v.dot(t);
         auto ep = 4.0*dot/(face_h*face_h);
 
-        for (size_t i = 0; i <= basis_degree; i++)
-        {
-            auto bv = iexp_pow(ep, i);
-            ret(i) = bv;
-        }
-        return ret;
+        // for (size_t i = 0; i <= basis_degree; i++)
+        // {
+        //     auto bv = iexp_pow(ep, i);
+        //     ret(i) = bv;
+        // }
+        ret(0) = 1;
+        if( basis_degree == 0)
+            return ret;
+
+        ret(1) = 2*ep;
+        if( basis_degree == 1)
+            return ret;
+
+        ret(2) = 12*ep*ep - 4;
+        if( basis_degree == 2)
+            return ret;
+
+        ret(3) = 120*ep*ep*ep - 72*ep;
+        if( basis_degree == 3)
+            return ret;
+
+        throw std::logic_error("bases : we shouldn't be here");
+        
+        // return ret;
     }
 
     size_t size() const
