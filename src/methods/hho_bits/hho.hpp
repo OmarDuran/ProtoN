@@ -130,7 +130,7 @@ make_hho_naive_stabilization(const Mesh& msh, const typename Mesh::cell_type& cl
 
         oper.block(0, cbs+i*fbs, fbs, fbs) = -If;
 
-        auto qps = integrate(msh, fc, 2*facdeg);
+        auto qps = integrate(msh, fc, 2*facdeg + 1);
         for (auto& qp : qps)
         {
             auto c_phi = cb.eval_basis(qp.first);

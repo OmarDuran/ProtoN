@@ -1195,7 +1195,7 @@ make_hho_cut_stabilization(const cuthho_mesh<T, ET>& msh,
 
         oper.block(0, cbs+i*fbs, fbs, fbs) = -If;
 
-        auto qps = integrate(msh, fc, 2*facdeg, where);
+        auto qps = integrate(msh, fc, 2*facdeg + 1, where);
         for (auto& qp : qps)
         {
             auto c_phi = cb.eval_basis(qp.first);
