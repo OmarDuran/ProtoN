@@ -1037,7 +1037,8 @@ make_hho_gradrec_vector_interface(const cuthho_mesh<T, ET>& msh,
     {
         const auto fc = fcs[i];
         const auto n  = ns[i];
-        face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg);
+        // face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg);
+        cut_face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg, where);
         
 
         const auto qps_f = integrate(msh, fc, facdeg + std::max(facdeg, celdeg), where);
@@ -1187,7 +1188,8 @@ make_hho_cut_stabilization(const cuthho_mesh<T, ET>& msh,
     for (size_t i = 0; i < num_faces; i++)
     {
         auto fc = fcs[i];
-        face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg);
+        // face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg);
+        cut_face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg, where);
 
         Matrix<T, Dynamic, Dynamic> oper = Matrix<T, Dynamic, Dynamic>::Zero(fbs, cbs+num_faces*fbs);
         Matrix<T, Dynamic, Dynamic> mass = Matrix<T, Dynamic, Dynamic>::Zero(fbs, fbs);
