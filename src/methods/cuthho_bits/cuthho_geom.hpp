@@ -1631,13 +1631,100 @@ merge_cells(Mesh& msh, const typename Mesh::cell_type cl1,
     if(cl1.user_data.distorted || cl2.user_data.distorted )
         cl.user_data.distorted = true;
 
+
+    // for tests
+    cl.user_data.highlight = true;
+
     // neighbors ---> NOT DONE : needed to iterate the agglomeration procedure
 
     return std::make_pair(cl, com_faces);
 }
 
 
+////// loc_agglo
+// container for information about local agglomerations
+// main_cell is defined when they are at least 3 cells
+template<typename cell_type>
+class loc_agglo
+{
+public:
+    cell_type main_cell;
+    std::vector<cell_type> cells;
 
+    cell_type new_cell;
+
+    loc_agglo(cell_type cl1, cell_type cl2, cell_type n_cell)
+    {
+        // check that the two cells are neighbors
+        auto pts1 = cl1.ptids;
+        auto pts2 = cl2.ptids;
+        std::vector<size_t> com_nodes;
+        for(size_t i = 0; i < pts1.size(); i++)
+        {
+            for(size_t j = 0; j < pts2.size(); j++)
+            {
+                if(pts1[i] == pts2[j]) com_nodes.push_back(pts1[i]);
+            }
+        }
+
+        assert( com_nodes.size() > 0 );
+
+        // init
+        cells.push_back( cl1 );
+        cells.push_back( cl2 );
+
+        new_cell = n_cell;
+    }
+
+    bool is_agglo_possible(size_t offset)
+    {
+        // when there are 2 cells, the main cell is not defined -> check all cells
+        if( cells.size() == 2 )
+        {
+            return (cells[0].user_data.neighbors.find(offset) != cells[0].user_data.neighbors.end())
+                || (cells[1].user_data.neighbors.find(offset) != cells[1].user_data.neighbors.end());
+        }
+
+        // else the main cell is defined -> can agglomerate only if it is a neighbor of that cell
+        return main_cell.user_data.neighbors.find(offset) != main_cell.user_data.neighbors.end();
+    }
+
+    bool is_in(cell_type cl)
+    {
+        bool ret = false;
+        for(size_t i = 0; i < cells.size(); i++)
+        {
+            if( cells[i] == cl)
+            {
+                ret = true;
+                break;
+            }
+        }
+        return ret;
+    }
+
+    void add_cell(cell_type cl_added, size_t offset, cell_type new_new_cell)
+    {
+        assert( is_agglo_possible(offset) );
+
+
+        // check that the cell is not already in the agglomeration
+        if( is_in(cl_added) )
+            throw std::logic_error("Cell already agglomerated !!");
+
+        // if there are only two cells, we also have to define the main cell
+        if( cells.size() == 2 )
+        {
+            if ( cells[0].user_data.neighbors.find(offset) != cells[0].user_data.neighbors.end() )
+                main_cell = cells[0];
+            else
+                main_cell = cells[1];
+        }
+
+        cells.push_back(cl_added);
+        new_cell = new_new_cell;
+    }
+};
 
 
 
@@ -1654,12 +1741,8 @@ void
 make_agglomeration(Mesh& msh, const Function& level_set_function)
 {
     std::vector<typename Mesh::face_type> removed_faces;
-    std::vector<int> old_cells;
-    std::vector<typename Mesh::cell_type> new_cells, removed_cells;
-
-    old_cells.reserve(msh.cells.size());
-    for(size_t i=0; i<msh.cells.size(); i++)
-        old_cells.push_back(-1);
+    std::vector<typename Mesh::cell_type> removed_cells;
+    std::vector< loc_agglo<typename Mesh::cell_type> > loc_agglos;
 
     // loop on the cells
     for (auto cl : msh.cells)
@@ -1675,6 +1758,20 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
         else if(cl.user_data.agglo_set == cell_agglo_set::T_KO_POS)
             where = element_location::IN_POSITIVE_SIDE;
 
+
+        // if cl is already aggomerated : no need for further agglomerations
+        bool already_agglo = false;
+        for (size_t i = 0; i < loc_agglos.size(); i++)
+        {
+            if( loc_agglos.at(i).is_in(cl) )
+            {
+                already_agglo = true;
+                break;
+            }
+        }
+        if( already_agglo )
+            continue;
+
         // look for a neighboring cell to merge with
         typename Mesh::coordinate_type area = 1000000;
         typename Mesh::cell_type best_neigh = cl;
@@ -1685,8 +1782,23 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
         {
             auto cl_n = msh.cells[*it];
 
+            // if cl_n is on the wrong size -> do not consider it
             if (location(msh, cl_n) != where
                 && location(msh, cl_n) != element_location::ON_INTERFACE)
+                continue;
+
+
+            // if cl_n is already aggomerated : check if further agglomerations is possible
+            bool agglo_possible = true;
+            for (size_t i = 0; i < loc_agglos.size(); i++)
+            {
+                if( loc_agglos.at(i).is_in(cl_n) )
+                {
+                    agglo_possible = loc_agglos.at(i).is_agglo_possible( offset(msh, cl) );
+                    break;
+                }
+            }
+            if( !agglo_possible )
                 continue;
 
             // search for the "best" neighbor -> the one with the smallest volume
@@ -1705,104 +1817,48 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
         // prepare agglomeration of cells cl and best_neigh
         size_t offset1 = offset(msh,cl);
         size_t offset2 = offset(msh,best_neigh);
-        if(old_cells[offset1] == -1 && old_cells[offset2] == -1)
-        { // those cells are not yet agglomerated
-            old_cells[offset1] = new_cells.size();
-            old_cells[offset2] = new_cells.size();
 
+
+        // check if best_neigh is already agglomerated
+        int agglo_offset = -1;
+        for (size_t i = 0; i < loc_agglos.size(); i++)
+        {
+            if( loc_agglos.at(i).is_in(best_neigh) )
+            {
+                agglo_offset = i;
+                break;
+            }
+        }
+
+        // if best_neigh is not agglomerated -> create a new agglomeration
+        if( agglo_offset == -1 )
+        {
+            auto MC = merge_cells(msh, cl, best_neigh);
+
+            // new_cells.push_back( MC.first );
+
+            loc_agglos.push_back( loc_agglo<typename Mesh::cell_type>(cl, best_neigh, MC.first) );
+
+            for(size_t i=0; i<MC.second.size(); i++)
+            {
+                removed_faces.push_back( MC.second[i] );
+            }
             removed_cells.push_back(cl);
             removed_cells.push_back(best_neigh);
-
-            auto MC = merge_cells(msh, cl, best_neigh);
-
-            new_cells.push_back( MC.first );
-
-            for(size_t i=0; i<MC.second.size(); i++)
-            {
-                removed_faces.push_back( MC.second[i] );
-            }
         }
-        else
-        { // at least one cell has already been agglomerated
+        else // else : use the previous agglomeration
+        {
+            auto MC = merge_cells(msh, cl, loc_agglos.at(agglo_offset).new_cell);
 
-            // if the desired agglomeration is already done
-            // -> nothing to do
-            if( old_cells[offset1] == old_cells[offset2] )
-                continue;
-
-            std::vector<int> cells_agglo;
-            if (old_cells[offset1] != -1)
-            {
-                cl = new_cells[ old_cells[offset1] ];
-                cells_agglo.push_back( old_cells[offset1] );
-            }
-            if (old_cells[offset2] != -1)
-            {
-                best_neigh = new_cells[ old_cells[offset2] ];
-                cells_agglo.push_back( old_cells[offset2] );
-            }
-
-            if( cells_agglo.size() == 0 || cells_agglo.size() > 2 )
-                throw std::logic_error("we shouldn't arrive here (prepare agglomeration) !!!");
-
-            if( cells_agglo.size() == 2 )
-            { // both cells are already agglomerated
-
-                // for convenience, we make sure we delete the cell with the larger offset
-                if( cells_agglo[0] > cells_agglo[1] )
-                {
-                    size_t max = cells_agglo[0];
-                    cells_agglo[0] = cells_agglo[1];
-                    cells_agglo[1] = max;
-                }
-
-                // the cells pointing on the second new cell must now point on the first one
-                for(size_t i=0; i<msh.cells.size(); i++)
-                {
-                    size_t oc = old_cells[i];
-                    if( oc == cells_agglo[1] )
-                    {
-                        old_cells[i] == cells_agglo[0];
-                    }
-                }
-
-                // remove the second new cell
-                new_cells.erase(std::remove(begin(new_cells), end(new_cells),
-                                            new_cells[ cells_agglo[1] ]), end(new_cells));
-
-                // the indices in the list have to be updated
-                for(size_t i=0; i<msh.cells.size(); i++)
-                {
-                    if(old_cells[i] > cells_agglo[1])
-                        old_cells[i] = old_cells[i] - 1;
-                }
-
-            }
-            else // only one cell is already agglomerated
-            {
-                if( old_cells[offset1] == cells_agglo[0])
-                {
-                    removed_cells.push_back( best_neigh );
-                    old_cells[offset2] = cells_agglo[0];
-                }
-                else if( old_cells[offset2] == cells_agglo[0])
-                {
-                    removed_cells.push_back( cl );
-                    old_cells[offset1] = cells_agglo[0];
-                }
-            }
-
-            auto MC = merge_cells(msh, cl, best_neigh);
-
-            new_cells[ cells_agglo[0] ] = MC.first;
+            loc_agglos.at(agglo_offset).add_cell(cl, offset1, MC.first);
 
             for(size_t i=0; i<MC.second.size(); i++)
             {
                 removed_faces.push_back( MC.second[i] );
             }
+            removed_cells.push_back(cl);
         }
     }
-
     //////////////   UPDATE THE MESH   //////////
 
     // remove the agglomerated cells
@@ -1812,9 +1868,9 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
     }
 
     // add new cells
-    typename std::vector<typename Mesh::cell_type>::iterator it_NC;
-    for(it_NC = new_cells.begin(); it_NC != new_cells.end(); it_NC++) {
-        msh.cells.push_back(*it_NC);
+    for (size_t i = 0; i < loc_agglos.size(); i++)
+    {
+        msh.cells.push_back(loc_agglos.at(i).new_cell);
     }
 
     // sort the new list of cells
@@ -1831,6 +1887,197 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
 }
 
 
+/////////////  OLD VERSION
+// ////// make_agglomeration
+// // the main agglomeration routine
+// // currently, the mesh obtained must have convex cells
+// // obtained by merging sub_cells with one face in common
+// // for non-convex cells -> modify measure and integrate
+// // for merging more general cells -> modify merge_cells
+// // for diagonal cells -> modify make_neighbors_info
+// // no iterations after merging bad cells once
+// template<typename Mesh, typename Function>
+// void
+// make_agglomeration(Mesh& msh, const Function& level_set_function)
+// {
+//     std::vector<typename Mesh::face_type> removed_faces;
+//     std::vector<int> old_cells;
+//     std::vector<typename Mesh::cell_type> new_cells, removed_cells;
+
+//     std::vector< loc_agglo<typename Mesh::cell_type> > loc_agglos;
+
+//     old_cells.reserve(msh.cells.size());
+//     for(size_t i=0; i<msh.cells.size(); i++)
+//         old_cells.push_back(-1);
+
+//     // loop on the cells
+//     for (auto cl : msh.cells)
+//     {
+//         element_location where;
+
+//         if(cl.user_data.agglo_set == cell_agglo_set::T_OK)
+//             continue;
+//         else if(cl.user_data.agglo_set == cell_agglo_set::UNDEF)
+//             throw std::logic_error("UNDEF agglo_set");
+//         else if(cl.user_data.agglo_set == cell_agglo_set::T_KO_NEG)
+//             where = element_location::IN_NEGATIVE_SIDE;
+//         else if(cl.user_data.agglo_set == cell_agglo_set::T_KO_POS)
+//             where = element_location::IN_POSITIVE_SIDE;
+
+//         // look for a neighboring cell to merge with
+//         typename Mesh::coordinate_type area = 1000000;
+//         typename Mesh::cell_type best_neigh = cl;
+
+//         auto neigh = cl.user_data.neighbors;
+
+//         for (std::set<size_t>::iterator it = neigh.begin(); it != neigh.end(); ++it)
+//         {
+//             auto cl_n = msh.cells[*it];
+
+//             if (location(msh, cl_n) != where
+//                 && location(msh, cl_n) != element_location::ON_INTERFACE)
+//                 continue;
+
+//             // search for the "best" neighbor -> the one with the smallest volume
+//             if( area > measure(msh, cl_n, where) )
+//             {
+//                 area = measure(msh, cl_n, where);
+//                 best_neigh = cl_n;
+//             }
+//         }
+
+//         if(best_neigh == cl)
+//         {
+//             throw std::logic_error("No possible agglomerations !!!");
+//         }
+
+//         // prepare agglomeration of cells cl and best_neigh
+//         size_t offset1 = offset(msh,cl);
+//         size_t offset2 = offset(msh,best_neigh);
+//         if(old_cells[offset1] == -1 && old_cells[offset2] == -1)
+//         { // those cells are not yet agglomerated
+//             old_cells[offset1] = new_cells.size();
+//             old_cells[offset2] = new_cells.size();
+
+//             removed_cells.push_back(cl);
+//             removed_cells.push_back(best_neigh);
+
+//             auto MC = merge_cells(msh, cl, best_neigh);
+
+//             new_cells.push_back( MC.first );
+
+//             for(size_t i=0; i<MC.second.size(); i++)
+//             {
+//                 removed_faces.push_back( MC.second[i] );
+//             }
+//         }
+//         else
+//         { // at least one cell has already been agglomerated
+
+//             // if the desired agglomeration is already done
+//             // -> nothing to do
+//             if( old_cells[offset1] == old_cells[offset2] )
+//                 continue;
+
+//             std::vector<int> cells_agglo;
+//             if (old_cells[offset1] != -1)
+//             {
+//                 cl = new_cells[ old_cells[offset1] ];
+//                 cells_agglo.push_back( old_cells[offset1] );
+//             }
+//             if (old_cells[offset2] != -1)
+//             {
+//                 best_neigh = new_cells[ old_cells[offset2] ];
+//                 cells_agglo.push_back( old_cells[offset2] );
+//             }
+
+//             if( cells_agglo.size() == 0 || cells_agglo.size() > 2 )
+//                 throw std::logic_error("we shouldn't arrive here (prepare agglomeration) !!!");
+
+//             if( cells_agglo.size() == 2 )
+//             { // both cells are already agglomerated
+
+//                 // for convenience, we make sure we delete the cell with the larger offset
+//                 if( cells_agglo[0] > cells_agglo[1] )
+//                 {
+//                     size_t max = cells_agglo[0];
+//                     cells_agglo[0] = cells_agglo[1];
+//                     cells_agglo[1] = max;
+//                 }
+
+//                 // the cells pointing on the second new cell must now point on the first one
+//                 for(size_t i=0; i<msh.cells.size(); i++)
+//                 {
+//                     size_t oc = old_cells[i];
+//                     if( oc == cells_agglo[1] )
+//                     {
+//                         old_cells[i] == cells_agglo[0];
+//                     }
+//                 }
+
+//                 // remove the second new cell
+//                 new_cells.erase(std::remove(begin(new_cells), end(new_cells),
+//                                             new_cells[ cells_agglo[1] ]), end(new_cells));
+
+//                 // the indices in the list have to be updated
+//                 for(size_t i=0; i<msh.cells.size(); i++)
+//                 {
+//                     if(old_cells[i] > cells_agglo[1])
+//                         old_cells[i] = old_cells[i] - 1;
+//                 }
+
+//             }
+//             else // only one cell is already agglomerated
+//             {
+//                 if( old_cells[offset1] == cells_agglo[0])
+//                 {
+//                     removed_cells.push_back( best_neigh );
+//                     old_cells[offset2] = cells_agglo[0];
+//                 }
+//                 else if( old_cells[offset2] == cells_agglo[0])
+//                 {
+//                     removed_cells.push_back( cl );
+//                     old_cells[offset1] = cells_agglo[0];
+//                 }
+//             }
+
+//             auto MC = merge_cells(msh, cl, best_neigh);
+
+//             new_cells[ cells_agglo[0] ] = MC.first;
+
+//             for(size_t i=0; i<MC.second.size(); i++)
+//             {
+//                 removed_faces.push_back( MC.second[i] );
+//             }
+//         }
+//     }
+
+//     //////////////   UPDATE THE MESH   //////////
+
+//     // remove the agglomerated cells
+//     typename std::vector<typename Mesh::cell_type>::iterator it_RC;
+//     for(it_RC = removed_cells.begin(); it_RC != removed_cells.end(); it_RC++) {
+//         msh.cells.erase(std::remove(begin(msh.cells), end(msh.cells), *it_RC ), end(msh.cells));
+//     }
+
+//     // add new cells
+//     typename std::vector<typename Mesh::cell_type>::iterator it_NC;
+//     for(it_NC = new_cells.begin(); it_NC != new_cells.end(); it_NC++) {
+//         msh.cells.push_back(*it_NC);
+//     }
+
+//     // sort the new list of cells
+//     std::sort(msh.cells.begin(), msh.cells.end());
+
+//     // remove faces
+//     typename std::vector<typename Mesh::face_type>::iterator it_RF;
+//     for(it_RF = removed_faces.begin(); it_RF != removed_faces.end(); it_RF++) {
+//         msh.faces.erase(std::remove(begin(msh.faces), end(msh.faces), *it_RF ), end(msh.faces));
+//     }
+
+//     // sort the new list of faces
+//     std::sort(msh.faces.begin(), msh.faces.end());
+// }
 
 
 //////////////////////////  CUT BASIS  ///////////////////////////

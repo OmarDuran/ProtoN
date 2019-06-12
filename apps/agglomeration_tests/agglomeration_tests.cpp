@@ -558,8 +558,8 @@ int main(int argc, char **argv)
         // make_neighbors_info(msh);
         refine_interface(msh, level_set_function, int_refsteps);
         // test_agglo(msh, level_set_function);
-        test_agglo_diag(msh, level_set_function);
-        // make_agglomeration(msh, level_set_function);
+        // test_agglo_diag(msh, level_set_function);
+        make_agglomeration(msh, level_set_function);
         // output_mesh_info(msh, level_set_function);
     }
     else
@@ -570,7 +570,7 @@ int main(int argc, char **argv)
         refine_interface(msh, level_set_function, int_refsteps);
     }
 
-    // output_mesh_info(msh, level_set_function);
+    output_mesh_info(msh, level_set_function);
     
     tc.toc();
     std::cout << bold << yellow << "cutHHO-specific mesh preprocessing: " << tc << " seconds" << reset << std::endl;
