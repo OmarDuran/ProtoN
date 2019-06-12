@@ -374,29 +374,41 @@ make_neighbors_info(cuthho_mesh<T, ET>& msh)
             auto &cl1 = msh.cells.at(i);
             auto &cl2 = msh.cells.at(j);
 
-            bool are_neighbors = false;
-
-            // // two neighbors have at least one common node
-            // for (size_t ip = 0; ip < cl1.ptids.size(); ip++)
-            //     for (size_t jp = 0; jp < cl2.ptids.size(); jp++)
-            //         if ( cl1.ptids[ip] == cl2.ptids[jp] )
-            //             are_neighbors = true;
-
-            // two neighbors have at least one common face
+            // two f_neighbors have at least one common face
+            bool are_f_neighbors = false;
             auto fc_j = faces(msh,msh.cells[j]);
             for (size_t i_face = 0; i_face < fc_i.size(); i_face++)
                 for (size_t j_face = 0; j_face < fc_j.size(); j_face++)
                     if ( fc_i[i_face] == fc_j[j_face] )
-                        are_neighbors = true;
+                        are_f_neighbors = true;
 
-            if ( !are_neighbors )
-                continue;
+            if (are_f_neighbors)
+            {
+                auto ofs_cl1 = offset(msh, cl1);
+                auto ofs_cl2 = offset(msh, cl2);
 
-            auto ofs_cl1 = offset(msh, cl1);
-            auto ofs_cl2 = offset(msh, cl2);
+                cl1.user_data.f_neighbors.insert(ofs_cl2);
+                cl2.user_data.f_neighbors.insert(ofs_cl1);
+            }
+            else
+            {
+                // two d_neighbors have at least one common node
+                bool are_d_neighbors = false;
+                for (size_t ip = 0; ip < cl1.ptids.size(); ip++)
+                    for (size_t jp = 0; jp < cl2.ptids.size(); jp++)
+                        if ( cl1.ptids[ip] == cl2.ptids[jp] )
+                            are_d_neighbors = true;
 
-            cl1.user_data.neighbors.insert(ofs_cl2);
-            cl2.user_data.neighbors.insert(ofs_cl1);
+                if (are_d_neighbors)
+                {
+                    auto ofs_cl1 = offset(msh, cl1);
+                    auto ofs_cl2 = offset(msh, cl2);
+
+                    cl1.user_data.d_neighbors.insert(ofs_cl2);
+                    cl2.user_data.d_neighbors.insert(ofs_cl1);
+                }
+
+            }
         }
     }
 
@@ -413,7 +425,7 @@ make_neighbors_info(cuthho_mesh<T, ET>& msh)
 
 //// version for cartesian meshes -> very quick
 /* this creates Delta(T) */
-// two neighbors have at least one common face
+// there are at least two row and two columns of cells
 template<typename T, size_t ET>
 void
 make_neighbors_info_cartesian(cuthho_mesh<T, ET>& msh)
@@ -424,14 +436,15 @@ make_neighbors_info_cartesian(cuthho_mesh<T, ET>& msh)
 
     size_t N = sqrt(msh.cells.size());
 
+    //////////////////  face neighbors  ///////////////////
     // first row of cells -> look left
     for (size_t i = 1; i < N; i++)
     {
         auto &cl1 = msh.cells.at(i);
         auto &cl2 = msh.cells.at(i-1);
 
-        cl1.user_data.neighbors.insert(i-1);
-        cl2.user_data.neighbors.insert(i);
+        cl1.user_data.f_neighbors.insert(i-1);
+        cl2.user_data.f_neighbors.insert(i);
     }
 
     // other rows of cells
@@ -440,8 +453,8 @@ make_neighbors_info_cartesian(cuthho_mesh<T, ET>& msh)
         // first cell of the row -> look bottom
         auto &cl1 = msh.cells.at( j*N );
         auto &cl2 = msh.cells.at( (j-1)*N );
-        cl1.user_data.neighbors.insert( (j-1)*N );
-        cl2.user_data.neighbors.insert( j*N );
+        cl1.user_data.f_neighbors.insert( (j-1)*N );
+        cl2.user_data.f_neighbors.insert( j*N );
 
         // other cells -> look left and bottom
         for (size_t i = 1; i < N; i++)
@@ -450,12 +463,52 @@ make_neighbors_info_cartesian(cuthho_mesh<T, ET>& msh)
             auto &cl_l = msh.cells.at( j*N + i - 1 ); // left
             auto &cl_b = msh.cells.at( (j-1)*N + i ); // bottom
 
-            cl_c.user_data.neighbors.insert( j*N + i - 1 );
-            cl_c.user_data.neighbors.insert( (j-1)*N + i );
+            cl_c.user_data.f_neighbors.insert( j*N + i - 1 );
+            cl_c.user_data.f_neighbors.insert( (j-1)*N + i );
 
-            cl_l.user_data.neighbors.insert( j*N + i );
-            cl_b.user_data.neighbors.insert( j*N + i );
+            cl_l.user_data.f_neighbors.insert( j*N + i );
+            cl_b.user_data.f_neighbors.insert( j*N + i );
         }
+    }
+
+    //////////////////////  diagonal neighbors  //////////////////////
+    // first row of cells -> look left top
+    for (size_t i = 1; i < N; i++)
+    {
+        auto &cl1 = msh.cells.at(i);
+        auto &cl2 = msh.cells.at(N + i-1);
+
+        cl1.user_data.d_neighbors.insert(N + i-1);
+        cl2.user_data.d_neighbors.insert(i);
+    }
+
+    // other rows of cells
+    for (size_t j = 1; j < N-1; j++)
+    {
+        // first cell of the row -> nothing to do
+        // other cells -> look left top and left bottom
+        for (size_t i = 1; i < N; i++)
+        {
+            auto &cl_c = msh.cells.at( j*N + i ); // current
+            auto &cl_l = msh.cells.at( (j+1)*N + i - 1 ); // left top
+            auto &cl_b = msh.cells.at( (j-1)*N + i - 1 ); // left bottom
+
+            cl_c.user_data.d_neighbors.insert( (j+1)*N + i - 1 );
+            cl_c.user_data.d_neighbors.insert( (j-1)*N + i - 1 );
+
+            cl_l.user_data.d_neighbors.insert( j*N + i );
+            cl_b.user_data.d_neighbors.insert( j*N + i );
+        }
+    }
+
+    // last row -> look left bottom
+    for (size_t i = 1; i < N; i++)
+    {
+        auto &cl1 = msh.cells.at( (N-1)*N + i);
+        auto &cl2 = msh.cells.at( (N-2)*N + i-1);
+
+        cl1.user_data.d_neighbors.insert((N-2)*N + i-1);
+        cl2.user_data.d_neighbors.insert((N-1)*N + i);
     }
 }
 
@@ -1681,12 +1734,15 @@ public:
         // when there are 2 cells, the main cell is not defined -> check all cells
         if( cells.size() == 2 )
         {
-            return (cells[0].user_data.neighbors.find(offset) != cells[0].user_data.neighbors.end())
-                || (cells[1].user_data.neighbors.find(offset) != cells[1].user_data.neighbors.end());
+            return (cells[0].user_data.f_neighbors.find(offset) != cells[0].user_data.f_neighbors.end())
+                || (cells[1].user_data.f_neighbors.find(offset) != cells[1].user_data.f_neighbors.end())
+                || (cells[0].user_data.d_neighbors.find(offset) != cells[0].user_data.d_neighbors.end())
+                || (cells[1].user_data.d_neighbors.find(offset) != cells[1].user_data.d_neighbors.end());
         }
 
         // else the main cell is defined -> can agglomerate only if it is a neighbor of that cell
-        return main_cell.user_data.neighbors.find(offset) != main_cell.user_data.neighbors.end();
+        return (main_cell.user_data.f_neighbors.find(offset) != main_cell.user_data.f_neighbors.end())
+            || (main_cell.user_data.d_neighbors.find(offset) != main_cell.user_data.d_neighbors.end());
     }
 
     bool is_in(cell_type cl)
@@ -1715,7 +1771,8 @@ public:
         // if there are only two cells, we also have to define the main cell
         if( cells.size() == 2 )
         {
-            if ( cells[0].user_data.neighbors.find(offset) != cells[0].user_data.neighbors.end() )
+            if ( cells[0].user_data.f_neighbors.find(offset) != cells[0].user_data.f_neighbors.end()
+                 || cells[0].user_data.d_neighbors.find(offset) != cells[0].user_data.d_neighbors.end() )
                 main_cell = cells[0];
             else
                 main_cell = cells[1];
@@ -1776,9 +1833,9 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
         typename Mesh::coordinate_type area = 1000000;
         typename Mesh::cell_type best_neigh = cl;
 
-        auto neigh = cl.user_data.neighbors;
+        auto f_neigh = cl.user_data.f_neighbors;
 
-        for (std::set<size_t>::iterator it = neigh.begin(); it != neigh.end(); ++it)
+        for (std::set<size_t>::iterator it = f_neigh.begin(); it != f_neigh.end(); ++it)
         {
             auto cl_n = msh.cells[*it];
 
@@ -1788,7 +1845,13 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
                 continue;
 
 
-            // if cl_n is already aggomerated : check if further agglomerations is possible
+            // if cl_n is a small cut of the same size -> do not consider it
+            if (where == element_location::IN_NEGATIVE_SIDE && cl_n.user_data.agglo_set == cell_agglo_set::T_KO_NEG)
+                continue;
+            if (where == element_location::IN_POSITIVE_SIDE && cl_n.user_data.agglo_set == cell_agglo_set::T_KO_POS)
+                continue;
+
+            // if cl_n is already aggomerated : check if further agglomerations are possible
             bool agglo_possible = true;
             for (size_t i = 0; i < loc_agglos.size(); i++)
             {
@@ -1806,6 +1869,42 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
             {
                 area = measure(msh, cl_n, where);
                 best_neigh = cl_n;
+            }
+        }
+
+        if(best_neigh == cl) // no possible face agglomerations
+        {
+            // look for a diagonal agglomeration
+            auto d_neigh = cl.user_data.d_neighbors;
+
+            for (std::set<size_t>::iterator it = d_neigh.begin(); it != d_neigh.end(); ++it)
+            {
+                auto cl_n = msh.cells[*it];
+
+                // if cl_n is on the wrong size or cut -> do not consider it
+                if (location(msh, cl_n) != where)
+                    continue;
+
+
+                // if cl_n is already aggomerated : check if further agglomerations are possible
+                bool agglo_possible = true;
+                for (size_t i = 0; i < loc_agglos.size(); i++)
+                {
+                    if( loc_agglos.at(i).is_in(cl_n) )
+                    {
+                        agglo_possible = loc_agglos.at(i).is_agglo_possible( offset(msh, cl) );
+                        break;
+                    }
+                }
+                if( !agglo_possible )
+                    continue;
+
+                // search for the "best" neighbor -> the one with the smallest volume
+                if( area > measure(msh, cl_n, where) )
+                {
+                    area = measure(msh, cl_n, where);
+                    best_neigh = cl_n;
+                }
             }
         }
 

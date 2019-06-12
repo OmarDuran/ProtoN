@@ -50,7 +50,8 @@ struct cell_cuthho_info
     point<T,2>                  p0, p1;
     std::vector<point<T,2>>     interface;
     bool                        distorted;
-    std::set<size_t>            neighbors;
+    std::set<size_t>            f_neighbors; // face neighbors
+    std::set<size_t>            d_neighbors; // diagonal neighbors
 
     bool                        highlight; // for tests
     cell_cuthho_info() :
