@@ -1711,3 +1711,129 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
     // sort the new list of faces
     std::sort(msh.faces.begin(), msh.faces.end());
 }
+
+
+
+
+//////////////////////////  CUT BASIS  ///////////////////////////
+
+
+template<typename Mesh, typename VT>
+class cut_face_basis
+{
+    typedef typename Mesh::coordinate_type  coordinate_type;
+    typedef typename Mesh::point_type       point_type;
+
+    point_type          face_bar;
+    point_type          base;
+    coordinate_type     face_h;
+    size_t              basis_degree, basis_size;
+
+public:
+    cut_face_basis(const Mesh& msh, const typename Mesh::face_type& fc, size_t degree,
+                   element_location where)
+    {
+        auto loc = location(msh,fc);
+        if( loc != where && loc != element_location::ON_INTERFACE)
+        {
+            face_bar        = barycenter(msh, fc);
+            face_h          = diameter(msh, fc);
+            basis_degree    = degree;
+            basis_size      = degree+1;
+
+            auto pts = points(msh, fc);
+            base = face_bar - pts[0];
+        }
+        else
+        {
+            face_bar        = barycenter(msh, fc, where);
+            face_h          = diameter(msh, fc, where);
+            basis_degree    = degree;
+            basis_size      = degree+1;
+
+            auto pts = points(msh, fc, where);
+            base = face_bar - pts[0];
+        }
+    }
+    Matrix<VT, Dynamic, 1>
+    eval_basis(const point_type& pt)
+    {
+        Matrix<VT, Dynamic, 1> ret = Matrix<VT, Dynamic, 1>::Zero(basis_size);
+
+        auto v = base.to_vector();
+        auto t = (pt - face_bar).to_vector();
+        auto dot = v.dot(t);
+        auto ep = 4.0*dot/(face_h*face_h);
+
+        coordinate_type coeff = sqrt(face_h / 2.0);
+
+        ret(0) = sqrt(1.0 / 2.0) / coeff;
+        if( basis_degree == 0)
+            return ret;
+
+        ret(1) = ep * sqrt(3.0 / 2.0) / coeff;
+        if( basis_degree == 1)
+            return ret;
+
+        ret(2) = (3*ep*ep - 1) * sqrt(5.0/8.0) / coeff;
+        if( basis_degree == 2)
+            return ret;
+
+        ret(3) = (5*ep*ep*ep - 3*ep) * sqrt(7.0 / 8.0) / coeff;
+        if( basis_degree == 3)
+            return ret;
+
+        throw std::logic_error("bases : we shouldn't be here");
+    }
+
+    size_t size() const
+    {
+        return basis_size;
+    }
+
+    size_t degree() const
+    {
+        return basis_degree;
+    }
+
+    static size_t size(size_t degree)
+    {
+        return degree+1;
+    }
+};
+
+
+
+template<typename T, size_t ET>
+auto
+barycenter(const cuthho_mesh<T, ET>& msh,
+           const typename cuthho_mesh<T, ET>::face_type& fc,
+           element_location where)
+{
+    if ( !is_cut(msh, fc) )
+        return barycenter(msh, fc);
+
+    auto tp = points(msh, fc, where);
+
+    point<T, 2> bar;
+    bar[0] = 0.5 * (tp[0][0] + tp[1][0]);
+    bar[1] = 0.5 * (tp[0][1] + tp[1][1]);
+
+    return bar;
+}
+
+
+template<typename T, size_t ET>
+auto
+diameter(const cuthho_mesh<T, ET>& msh,
+           const typename cuthho_mesh<T, ET>::face_type& fc,
+           element_location where)
+{
+    if ( !is_cut(msh, fc) )
+        return diameter(msh, fc);
+
+    auto tp = points(msh, fc, where);
+    auto vect = (tp[0] - tp[1]).to_vector();
+    T ret = vect.norm();
+    return ret;
+}
