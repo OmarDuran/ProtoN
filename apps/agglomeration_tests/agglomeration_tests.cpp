@@ -432,6 +432,49 @@ test_agglo(Mesh& msh, const Function& level_set_function)
 }
 
 
+//////////////  TEST_AGGLO_DIAG
+/// test the diagonal merging procedure
+// this routine has been written for a 10x10 mesh
+template<typename Mesh, typename Function>
+void
+test_agglo_diag(Mesh& msh, const Function& level_set_function)
+{
+    std::vector<typename Mesh::cell_type> new_cells, removed_cells;
+
+    typename Mesh::cell_type cl1 = msh.cells[1];
+    typename Mesh::cell_type cl2 = msh.cells[12];
+    auto cl = merge_cells(msh, cl1, cl2).first;
+    cl.user_data.highlight = true;
+    new_cells.push_back( cl );
+    removed_cells.push_back( cl1 );
+    removed_cells.push_back( cl2 );
+
+    cl1 = msh.cells[76];
+    cl2 = msh.cells[65];
+    cl = merge_cells(msh, cl1, cl2).first;
+    cl.user_data.highlight = true;
+    new_cells.push_back( cl );
+    removed_cells.push_back( cl1 );
+    removed_cells.push_back( cl2 );
+
+    // remove the agglomerated cells
+    typename std::vector<typename Mesh::cell_type>::iterator it_RC;
+    for(it_RC = removed_cells.begin(); it_RC != removed_cells.end(); it_RC++) {
+        msh.cells.erase(std::remove(begin(msh.cells), end(msh.cells), *it_RC ), end(msh.cells));
+    }
+
+    // add new cells
+    typename std::vector<typename Mesh::cell_type>::iterator it_NC;
+    for(it_NC = new_cells.begin(); it_NC != new_cells.end(); it_NC++) {
+        msh.cells.push_back(*it_NC);
+    }
+
+    // sort the new list of cells
+    std::sort(msh.cells.begin(), msh.cells.end());
+
+    // output the mesh obtained
+    output_mesh_info(msh, level_set_function);
+}
 
 int main(int argc, char **argv)
 {
@@ -515,7 +558,8 @@ int main(int argc, char **argv)
         // make_neighbors_info(msh);
         refine_interface(msh, level_set_function, int_refsteps);
         // test_agglo(msh, level_set_function);
-        make_agglomeration(msh, level_set_function);
+        test_agglo_diag(msh, level_set_function);
+        // make_agglomeration(msh, level_set_function);
         // output_mesh_info(msh, level_set_function);
     }
     else
@@ -526,7 +570,7 @@ int main(int argc, char **argv)
         refine_interface(msh, level_set_function, int_refsteps);
     }
 
-    output_mesh_info(msh, level_set_function);
+    // output_mesh_info(msh, level_set_function);
     
     tc.toc();
     std::cout << bold << yellow << "cutHHO-specific mesh preprocessing: " << tc << " seconds" << reset << std::endl;

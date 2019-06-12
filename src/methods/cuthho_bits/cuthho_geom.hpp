@@ -1339,12 +1339,178 @@ auto make_assembler(const cuthho_mesh<T, ET>& msh, hho_degree_info hdi)
 
 #endif
 
+
 ///////////////////   AGGLOMERATION   ///////////////////
 
+//////////////  MERGE_CELLS_FACE
+/// merge cl1 and cl2 through the common face fc
+// output : new cell
+template<typename cell_type, typename face_type>
+cell_type
+merge_cells_face(cell_type cl1, cell_type cl2, face_type com_f)
+{
+    cell_type ret;
+
+    size_t f_pt1 = com_f.ptids[0];
+    size_t f_pt2 = com_f.ptids[1];
+
+    // list of points
+    std::vector<size_t> pts1, pts2;
+    // in order to be consistent with the cell representation, start with the smallest index
+    if(cl1.ptids[0] < cl2.ptids[0])
+    {
+        pts1 = cl1.ptids;
+        pts2 = cl2.ptids;
+    }
+    else
+    {
+        pts1 = cl2.ptids;
+        pts2 = cl1.ptids;
+    }
+
+    // write points of pts1 until we reach the common face
+    size_t ref_pt = pts1[0];
+    size_t cp = 0;
+    ret.ptids.push_back(ref_pt);
+
+    bool on_face = false;
+    if(ref_pt == f_pt1 || ref_pt == f_pt2) on_face = true;
+
+    while(!on_face)
+    {
+        cp++;
+        ref_pt = pts1[cp];
+        ret.ptids.push_back(ref_pt);
+        if(ref_pt == f_pt1 || ref_pt == f_pt2) on_face = true;
+    }
+
+    // look for the corresponding point in pts2
+    for(size_t i = 0; i < pts2.size(); i++)
+    {
+        if(ref_pt == pts2[i])
+        {
+            cp = i;
+            break;
+        }
+    }
+    // write points of pts2 until we reach once more the common face
+    on_face = false;
+    while( !on_face )
+    {
+        cp = (cp + 1) % pts2.size();
+        ref_pt = pts2[cp];
+        ret.ptids.push_back(ref_pt);
+        if(ref_pt == f_pt1 || ref_pt == f_pt2) on_face = true;
+    }
+    // look for the corresponding point in pts1
+    for(size_t i=0; i < pts1.size(); i++)
+    {
+        if(ref_pt == pts1[i])
+        {
+            cp = i;
+            break;
+        }
+    }
+
+    // finish to write the points of pts1
+    cp++;
+    while(cp < pts1.size())
+    {
+        ret.ptids.push_back(pts1[cp]);
+        cp++;
+    }
+
+    return ret;
+}
+
+
+//////////////  MERGE_CELLS_DIAG
+/// merge cl1 and cl2 through the common node com_n
+// output : new cell
+template<typename cell_type>
+cell_type
+merge_cells_diag(cell_type cl1, cell_type cl2, size_t com_n)
+{
+    // abort the process if both cells are on the interface
+    // (this case is not yet supported for the list of points on the interface)
+    if( cl1.user_data.location == element_location::ON_INTERFACE
+        && cl2.user_data.location == element_location::ON_INTERFACE )
+        throw std::invalid_argument("Cannot merge diagonally two cells on the interface.");
+
+    cell_type ret;
+
+    // list of points
+    std::vector<size_t> pts1, pts2;
+    // in order to be consistent with the cell representation, start with the smallest index
+    if(cl1.ptids[0] < cl2.ptids[0])
+    {
+        pts1 = cl1.ptids;
+        pts2 = cl2.ptids;
+    }
+    else
+    {
+        pts1 = cl2.ptids;
+        pts2 = cl1.ptids;
+    }
+
+    // write points of pts1 until we reach the common face
+    size_t ref_pt = pts1[0];
+    size_t cp = 0;
+    ret.ptids.push_back(ref_pt);
+
+    bool on_interface = false;
+    if(ref_pt == com_n) on_interface = true;
+
+    while(!on_interface)
+    {
+        cp++;
+        ref_pt = pts1[cp];
+        ret.ptids.push_back(ref_pt);
+        if(ref_pt == com_n) on_interface = true;
+    }
+
+    // look for the corresponding point in pts2
+    for(size_t i = 0; i < pts2.size(); i++)
+    {
+        if(ref_pt == pts2[i])
+        {
+            cp = i;
+            break;
+        }
+    }
+    // write points of pts2 until we reach once more the common node
+    on_interface = false;
+    while( !on_interface )
+    {
+        cp = (cp + 1) % pts2.size();
+        ref_pt = pts2[cp];
+        ret.ptids.push_back(ref_pt);
+        if(ref_pt == com_n) on_interface = true;
+    }
+
+    // look for the corresponding point in pts1
+    for(size_t i=0; i < pts1.size(); i++)
+    {
+        if(ref_pt == pts1[i])
+        {
+            cp = i;
+            break;
+        }
+    }
+
+    // finish to write the points of pts1
+    cp++;
+    while(cp < pts1.size())
+    {
+        ret.ptids.push_back(pts1[cp]);
+        cp++;
+    }
+
+    return ret;
+}
 
 //////////////  MERGE_CELLS
 /// merge cl1 and cl2
-/// modify the msh
 // output : the agglomerated cell + list of faces to withdraw
 /////  For the moment we can merge only cells that have at least a common face
 /////  This procedure currently cannot be iterated
@@ -1372,86 +1538,38 @@ merge_cells(Mesh& msh, const typename Mesh::cell_type cl1,
             if(fc1 == fc2) com_faces.push_back(fc1);
         }
     }
-    // verify that those cells have exactly one common face
-    if(com_faces.size() == 0)
-        throw std::invalid_argument("The cells do not have common faces.");
 
-    if(com_faces.size() > 1)
-        throw std::invalid_argument("The routine currently works only for one common face.");
+    // identify the common nodes
+    std::vector<size_t> com_nodes;
+    for(size_t i = 0; i < cl1.ptids.size(); i++)
+    {
+        for(size_t j = 0; j < cl2.ptids.size(); j++)
+        {
+            if(cl1.ptids[i] == cl2.ptids[j]) com_nodes.push_back(cl1.ptids[i]);
+        }
+    }
 
-    //////////////    CREATE THE MERGED CELL   //////////////
+    // choose the agglomeration technique
     typename Mesh::cell_type cl;
-
-    typename Mesh::face_type com_f = com_faces[0];
-    size_t f_pt1 = com_f.ptids[0];
-    size_t f_pt2 = com_f.ptids[1];
-
-    // list of points
-    std::vector<size_t> pts1, pts2;
-    // in order to be consistent with the cell representation, start with the smallest index
-    if(cl1.ptids[0] < cl2.ptids[0])
+    if(com_faces.size() == 0)
     {
-        pts1 = cl1.ptids;
-        pts2 = cl2.ptids;
-    }
-    else
-    {
-        pts1 = cl2.ptids;
-        pts2 = cl1.ptids;
-    }
-
-    // write points of pts1 until we reach the common face
-    size_t ref_pt = pts1[0];
-    size_t cp = 0;
-    cl.ptids.push_back(ref_pt);
-
-    bool on_face = false;
-    if(ref_pt == f_pt1 || ref_pt == f_pt2) on_face = true;
-
-    while(!on_face)
-    {
-        cp++;
-        ref_pt = pts1[cp];
-        cl.ptids.push_back(ref_pt);
-        if(ref_pt == f_pt1 || ref_pt == f_pt2) on_face = true;
-    }
-
-    // look for the corresponding point in pts2
-    for(size_t i = 0; i < pts2.size(); i++)
-    {
-        if(ref_pt == pts2[i])
+        std::cout << "com nodes nb = " << com_nodes.size() << std::endl;
+        if( com_nodes.size() == 1 )
         {
-            cp = i;
-            break;
+            cl = merge_cells_diag(cl1, cl2, com_nodes[0]);
         }
+        else
+            throw std::invalid_argument("The cells have no common faces.");
     }
-    // write points of pts2 until we reach once more the common face
-    on_face = false;
-    while( !on_face )
+    else if( com_faces.size() == 1 )
     {
-        cp = (cp + 1) % pts2.size();
-        ref_pt = pts2[cp];
-        cl.ptids.push_back(ref_pt);
-        if(ref_pt == f_pt1 || ref_pt == f_pt2) on_face = true;
+        assert(com_nodes.size() == 2); // only the nodes of the common face
+        cl = merge_cells_face(cl1, cl2, com_faces[0]);
     }
-    // look for the corresponding point in pts1
-    for(size_t i=0; i < pts1.size(); i++)
-    {
-        if(ref_pt == pts1[i])
-        {
-            cp = i;
-            break;
-        }
-    }
+    if(com_faces.size() > 1)
+        throw std::invalid_argument("The cells have several common faces.");
 
-    // finish to write the points of pts1
-    cp++;
-    while(cp < pts1.size())
-    {
-        cl.ptids.push_back(pts1[cp]);
-        cp++;
-    }
-
+    //////////////    COMPLETE THE MERGED CELL   //////////////
 
     ///////////// build the cell_cuthho_info (using the sub_cells info)
     // location
