@@ -363,10 +363,8 @@ output_mesh_info(const Mesh& msh, const Function& level_set_function)
         
     }
     
-    
     std::ofstream points_file("int_points.3D", std::ios::out | std::ios::trunc); 
  
-
     if(points_file) 
     {       
         // instructions
@@ -383,6 +381,43 @@ output_mesh_info(const Mesh& msh, const Function& level_set_function)
 
     else 
         std::cerr << "Points_file has not been opened" << std::endl;
+
+
+    /*************  MAKE AN OUTPUT FOR THE INTERFACE *************/
+    std::vector<RealType> int_x;
+    std::vector<RealType> int_y;
+
+    for (auto& cl : msh.cells)
+    {
+        if( cl.user_data.location != element_location::ON_INTERFACE ) continue;
+
+        for(size_t i = 0; i < cl.user_data.interface.size(); i++)
+        {
+            RealType x = cl.user_data.interface.at(i).x();
+            RealType y = cl.user_data.interface.at(i).y();
+
+            int_x.push_back(x);
+            int_y.push_back(y);
+        }
+    }
+    std::ofstream interface_file("interface.3D", std::ios::out | std::ios::trunc);
+
+    if(interface_file)
+    {
+        // instructions
+        interface_file << "X   Y   Z   val" << std::endl;
+
+        for( size_t i = 0; i<int_x.size(); i++)
+        {
+            interface_file << int_x[i] << "   " <<  int_y[i]
+                        << "   0.0     0.0" << std::endl;
+        }
+
+        interface_file.close();
+    }
+
+    else
+        std::cerr << "Interface_file has not been opened" << std::endl;
 }
 
 
@@ -432,6 +467,49 @@ test_agglo(Mesh& msh, const Function& level_set_function)
 }
 
 
+//////////////  TEST_AGGLO_DIAG
+/// test the diagonal merging procedure
+// this routine has been written for a 10x10 mesh
+template<typename Mesh, typename Function>
+void
+test_agglo_diag(Mesh& msh, const Function& level_set_function)
+{
+    std::vector<typename Mesh::cell_type> new_cells, removed_cells;
+
+    typename Mesh::cell_type cl1 = msh.cells[1];
+    typename Mesh::cell_type cl2 = msh.cells[12];
+    auto cl = merge_cells(msh, cl1, cl2).first;
+    cl.user_data.highlight = true;
+    new_cells.push_back( cl );
+    removed_cells.push_back( cl1 );
+    removed_cells.push_back( cl2 );
+
+    cl1 = msh.cells[76];
+    cl2 = msh.cells[65];
+    cl = merge_cells(msh, cl1, cl2).first;
+    cl.user_data.highlight = true;
+    new_cells.push_back( cl );
+    removed_cells.push_back( cl1 );
+    removed_cells.push_back( cl2 );
+
+    // remove the agglomerated cells
+    typename std::vector<typename Mesh::cell_type>::iterator it_RC;
+    for(it_RC = removed_cells.begin(); it_RC != removed_cells.end(); it_RC++) {
+        msh.cells.erase(std::remove(begin(msh.cells), end(msh.cells), *it_RC ), end(msh.cells));
+    }
+
+    // add new cells
+    typename std::vector<typename Mesh::cell_type>::iterator it_NC;
+    for(it_NC = new_cells.begin(); it_NC != new_cells.end(); it_NC++) {
+        msh.cells.push_back(*it_NC);
+    }
+
+    // sort the new list of cells
+    std::sort(msh.cells.begin(), msh.cells.end());
+
+    // output the mesh obtained
+    output_mesh_info(msh, level_set_function);
+}
 
 int main(int argc, char **argv)
 {
@@ -498,9 +576,9 @@ int main(int argc, char **argv)
     std::cout << bold << yellow << "Mesh generation: " << tc << " seconds" << reset << std::endl;
     /************** LEVEL SET FUNCTION **************/
     RealType radius = 1.0/3.0;
-    auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
+    // auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
     // auto level_set_function = line_level_set<RealType>(0.5);
-    // auto level_set_function = carre_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
+    auto level_set_function = carre_level_set<RealType>(0.77, 0.23, 0.23, 0.77);
     /************** DO cutHHO MESH PROCESSING **************/
 
     tc.tic();
@@ -515,6 +593,7 @@ int main(int argc, char **argv)
         // make_neighbors_info(msh);
         refine_interface(msh, level_set_function, int_refsteps);
         // test_agglo(msh, level_set_function);
+        // test_agglo_diag(msh, level_set_function);
         make_agglomeration(msh, level_set_function);
         // output_mesh_info(msh, level_set_function);
     }
