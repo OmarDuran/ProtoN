@@ -1477,6 +1477,116 @@ merge_cells_face(cell_type cl1, cell_type cl2, face_type com_f)
 }
 
 
+
+//////////////  MERGE_CELLS_TWO_FACES
+/// merge cl1 and cl2 through the list com_f of common faces
+// output : new cell
+template<typename cell_type, typename face_type>
+cell_type
+merge_cells_two_faces(cell_type cl1, cell_type cl2, typename std::vector<face_type> com_f)
+{
+    cell_type ret;
+
+    assert( com_f.size() == 2 );
+
+    size_t f1_pt1 = com_f[0].ptids[0];
+    size_t f1_pt2 = com_f[0].ptids[1];
+    size_t f2_pt1 = com_f[1].ptids[0];
+    size_t f2_pt2 = com_f[1].ptids[1];
+
+    std::set<size_t> com_pts;
+    if(f1_pt1 == f2_pt1 || f1_pt2 == f2_pt1)
+    {
+        com_pts.insert(f1_pt1);
+        com_pts.insert(f1_pt2);
+        com_pts.insert(f2_pt2);
+    }
+    else if(f1_pt1 == f2_pt2 || f1_pt2 == f2_pt2)
+    {
+        com_pts.insert(f1_pt1);
+        com_pts.insert(f1_pt2);
+        com_pts.insert(f2_pt1);
+    }
+    else
+        throw std::logic_error("com_f : no common points");
+
+    // list of points
+    std::vector<size_t> pts1, pts2;
+    // in order to be consistent with the cell representation, start with the smallest index
+    if(cl1.ptids[0] < cl2.ptids[0])
+    {
+        pts1 = cl1.ptids;
+        pts2 = cl2.ptids;
+    }
+    else
+    {
+        pts1 = cl2.ptids;
+        pts2 = cl1.ptids;
+    }
+
+    // write points of pts1 until we reach the common face
+    size_t ref_pt = pts1[0];
+    size_t next_pt= pts1[1];
+    size_t cp = 0;
+    ret.ptids.push_back(ref_pt);
+
+    bool on_face = false;
+    if( com_pts.find(ref_pt) != com_pts.end() && com_pts.find(next_pt) != com_pts.end() )
+        on_face = true;
+
+    while(!on_face)
+    {
+        cp++;
+        ref_pt = next_pt;
+        next_pt= pts1[(cp+1)%pts1.size()];
+        ret.ptids.push_back(ref_pt);
+        if( com_pts.find(ref_pt) != com_pts.end() && com_pts.find(next_pt) != com_pts.end() )
+            on_face = true;
+    }
+
+    // look for the corresponding point in pts2
+    for(size_t i = 0; i < pts2.size(); i++)
+    {
+        if(ref_pt == pts2[i])
+        {
+            cp = i;
+            break;
+        }
+    }
+
+    // write points of pts2 until we reach once more the common face
+    on_face = false;
+    while( !on_face )
+    {
+        cp = (cp + 1) % pts2.size();
+        ref_pt = pts2[cp];
+        next_pt= pts2[(cp+1) % pts2.size()];
+        ret.ptids.push_back(ref_pt);
+        if( com_pts.find(ref_pt) != com_pts.end() && com_pts.find(next_pt) != com_pts.end() )
+            on_face = true;
+    }
+    // look for the corresponding point in pts1
+    for(size_t i=0; i < pts1.size(); i++)
+    {
+        if(ref_pt == pts1[i])
+        {
+            cp = i;
+            break;
+        }
+    }
+
+    // finish to write the points of pts1
+    cp++;
+    while(cp < pts1.size())
+    {
+        ret.ptids.push_back(pts1[cp]);
+        cp++;
+    }
+
+    return ret;
+}
+
+
 //////////////  MERGE_CELLS_DIAG
 /// merge cl1 and cl2 through the common node com_n
 // output : new cell
@@ -1593,12 +1703,17 @@ merge_cells(Mesh& msh, const typename Mesh::cell_type cl1,
     }
 
     // identify the common nodes
-    std::vector<size_t> com_nodes;
+    std::set<size_t> com_nodes;
+    size_t com_n;
     for(size_t i = 0; i < cl1.ptids.size(); i++)
     {
         for(size_t j = 0; j < cl2.ptids.size(); j++)
         {
-            if(cl1.ptids[i] == cl2.ptids[j]) com_nodes.push_back(cl1.ptids[i]);
+            if(cl1.ptids[i] == cl2.ptids[j])
+            {
+                com_nodes.insert(cl1.ptids[i]);
+                com_n = cl1.ptids[i];
+            }
         }
     }
 
@@ -1609,7 +1724,7 @@ merge_cells(Mesh& msh, const typename Mesh::cell_type cl1,
         std::cout << "com nodes nb = " << com_nodes.size() << std::endl;
         if( com_nodes.size() == 1 )
         {
-            cl = merge_cells_diag(cl1, cl2, com_nodes[0]);
+            cl = merge_cells_diag(cl1, cl2, com_n);
         }
         else
             throw std::invalid_argument("The cells have no common faces.");
@@ -1619,8 +1734,14 @@ merge_cells(Mesh& msh, const typename Mesh::cell_type cl1,
         assert(com_nodes.size() == 2); // only the nodes of the common face
         cl = merge_cells_face(cl1, cl2, com_faces[0]);
     }
-    if(com_faces.size() > 1)
-        throw std::invalid_argument("The cells have several common faces.");
+    else if( com_faces.size() == 2 )
+    {
+        std::cout << "com nodes nb = " << com_nodes.size() << std::endl;
+        assert(com_nodes.size() == 3); // only the case with two adjascent common faces
+        cl = merge_cells_two_faces(cl1, cl2, com_faces);
+    }
+    if(com_faces.size() > 2)
+        throw std::invalid_argument("The cells have too many common faces.");
 
     //////////////    COMPLETE THE MERGED CELL   //////////////
 
@@ -1947,6 +2068,85 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
         }
         else // else : use the previous agglomeration
         {
+            // if the merged cell is cut four times -> need to agglomerate one more cell
+            bool need_other_agglo = true;
+            auto NC = loc_agglos.at(agglo_offset).new_cell;
+            if( NC.user_data.p0.x() == cl.user_data.p1.x()
+                && NC.user_data.p0.y() == cl.user_data.p1.y() )
+                need_other_agglo = false;
+            if( NC.user_data.p1.x() == cl.user_data.p0.x()
+                && NC.user_data.p1.y() == cl.user_data.p0.y() )
+                need_other_agglo = false;
+            if( NC.user_data.p0.x() == cl.user_data.p0.x()
+                && NC.user_data.p0.y() == cl.user_data.p0.y() )
+                need_other_agglo = false;
+            if( NC.user_data.p1.x() == cl.user_data.p1.x()
+                && NC.user_data.p1.y() == cl.user_data.p1.y() )
+                need_other_agglo = false;
+
+            if( need_other_agglo )
+            {
+                std::cout << "agglomerate one more cell !!" << std::endl;
+
+                // look for a cell that share two intersection points with cl and NC
+                // this cell is searched among the face neighbors
+                typename Mesh::cell_type cell_agglo;
+                bool found_cell_agglo = false;
+                size_t offset_cell_bis;
+                for (std::set<size_t>::iterator it = f_neigh.begin(); it != f_neigh.end(); ++it)
+                {
+                    auto cl_f = msh.cells[*it];
+                    if(location(msh, cl_f) != element_location::ON_INTERFACE)
+                        continue;
+
+                    if( (  cl_f.user_data.p0.x() == cl.user_data.p0.x()
+                           && cl_f.user_data.p0.y() == cl.user_data.p0.y() )
+                        || (cl_f.user_data.p1.x() == cl.user_data.p0.x()
+                            && cl_f.user_data.p1.y() == cl.user_data.p0.y() )
+                        || (cl_f.user_data.p0.x() == cl.user_data.p1.x()
+                            && cl_f.user_data.p0.y() == cl.user_data.p1.y() )
+                        || (cl_f.user_data.p1.x() == cl.user_data.p1.x()
+                            && cl_f.user_data.p1.y() == cl.user_data.p1.y() )
+                        )
+                    { // this cell is connected with cl
+                        if( (  cl_f.user_data.p0.x() == NC.user_data.p0.x()
+                               && cl_f.user_data.p0.y() == NC.user_data.p0.y() )
+                            || (cl_f.user_data.p1.x() == NC.user_data.p0.x()
+                                && cl_f.user_data.p1.y() == NC.user_data.p0.y() )
+                            || (cl_f.user_data.p0.x() == NC.user_data.p1.x()
+                                && cl_f.user_data.p0.y() == NC.user_data.p1.y() )
+                            || (cl_f.user_data.p1.x() == NC.user_data.p1.x()
+                                && cl_f.user_data.p1.y() == NC.user_data.p1.y() )
+                            )
+                        { // this cell is connected with NC
+                            cell_agglo = cl_f;
+                            offset_cell_bis = *it;
+                            found_cell_agglo = true;
+                            break;
+                        }
+                    }
+                }
+
+                if(found_cell_agglo)
+                {
+                    std::cout << "cell_agglo_found" << std::endl;
+                    auto MC_bis = merge_cells(msh, cell_agglo,
+                                              loc_agglos.at(agglo_offset).new_cell);
+                    loc_agglos.at(agglo_offset).add_cell(cell_agglo,
+                                                         offset_cell_bis, MC_bis.first);
+
+
+                    for(size_t i=0; i<MC_bis.second.size(); i++)
+                    {
+                        removed_faces.push_back( MC_bis.second[i] );
+                    }
+                    removed_cells.push_back(cell_agglo);
+                }
+                else
+                    throw std::logic_error("Cell agglo not found !!");
+
+            }
+
             auto MC = merge_cells(msh, cl, loc_agglos.at(agglo_offset).new_cell);
 
             loc_agglos.at(agglo_offset).add_cell(cl, offset1, MC.first);
