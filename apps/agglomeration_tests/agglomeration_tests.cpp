@@ -363,10 +363,8 @@ output_mesh_info(const Mesh& msh, const Function& level_set_function)
         
     }
     
-    
     std::ofstream points_file("int_points.3D", std::ios::out | std::ios::trunc); 
  
-
     if(points_file) 
     {       
         // instructions
@@ -383,6 +381,43 @@ output_mesh_info(const Mesh& msh, const Function& level_set_function)
 
     else 
         std::cerr << "Points_file has not been opened" << std::endl;
+
+
+    /*************  MAKE AN OUTPUT FOR THE INTERFACE *************/
+    std::vector<RealType> int_x;
+    std::vector<RealType> int_y;
+
+    for (auto& cl : msh.cells)
+    {
+        if( cl.user_data.location != element_location::ON_INTERFACE ) continue;
+
+        for(size_t i = 0; i < cl.user_data.interface.size(); i++)
+        {
+            RealType x = cl.user_data.interface.at(i).x();
+            RealType y = cl.user_data.interface.at(i).y();
+
+            int_x.push_back(x);
+            int_y.push_back(y);
+        }
+    }
+    std::ofstream interface_file("interface.3D", std::ios::out | std::ios::trunc);
+
+    if(interface_file)
+    {
+        // instructions
+        interface_file << "X   Y   Z   val" << std::endl;
+
+        for( size_t i = 0; i<int_x.size(); i++)
+        {
+            interface_file << int_x[i] << "   " <<  int_y[i]
+                        << "   0.0     0.0" << std::endl;
+        }
+
+        interface_file.close();
+    }
+
+    else
+        std::cerr << "Interface_file has not been opened" << std::endl;
 }
 
 
@@ -543,7 +578,7 @@ int main(int argc, char **argv)
     RealType radius = 1.0/3.0;
     auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
     // auto level_set_function = line_level_set<RealType>(0.5);
-    // auto level_set_function = carre_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
+    // auto level_set_function = carre_level_set<RealType>(0.77, 0.23, 0.23, 0.77);
     /************** DO cutHHO MESH PROCESSING **************/
 
     tc.tic();
