@@ -524,7 +524,7 @@ void test_projection(const Mesh& msh, const Function& level_set_function, size_t
             RHS += qp.second * ref_fun(qp.first) * phi;
         }
 
-        // computation of degrees of projection coefficients
+        // computation of projection coefficients
         auto M_ldlt = mass.ldlt();
         Matrix<T, Dynamic, 1> U = M_ldlt.solve(RHS);
 
@@ -610,6 +610,153 @@ void test_projection(const Mesh& msh, const Function& level_set_function, size_t
     std::cout << bold << red << "L2-norm absolute error on interface :           " << std::sqrt(interface_L2_error) << std::endl;
 }
 
+
+
+
+void tests_stabilization()
+{
+    using T = double;
+    using Mesh = cuthho_poly_mesh<T>;
+
+    // reference function (to be projected)
+    auto ref_fun = [](const typename cuthho_poly_mesh<T>::point_type& pt) -> T {
+        return std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());
+    };
+
+
+    std::vector<size_t> mesh_sizes, pol_orders;
+
+    // meshes
+    mesh_sizes.push_back(8);
+    mesh_sizes.push_back(16);
+    mesh_sizes.push_back(32);
+    mesh_sizes.push_back(64);
+    mesh_sizes.push_back(128);
+
+    // polynomial orders
+    pol_orders.push_back(0);
+    pol_orders.push_back(1);
+    pol_orders.push_back(2);
+    pol_orders.push_back(3);
+
+    for (std::vector<size_t>::iterator it = pol_orders.begin(); it != pol_orders.end(); it++)
+    {
+        size_t k = *it;
+
+        std::cout << bold << blue << "!!!!!!!! start tests for k = " << k << std::endl;
+
+        for (std::vector<size_t>::iterator it_msh = mesh_sizes.begin();
+             it_msh != mesh_sizes.end(); it_msh++)
+        {
+            // mesh
+            size_t N = *it_msh;
+            mesh_init_params<T> mip;
+            mip.Nx = N;
+            mip.Ny = N;
+            cuthho_poly_mesh<T> msh(mip);
+
+
+            T error_T = 0.0;
+            T error_F = 0.0;
+            T error_stab = 0.0;
+
+            auto cbs = cell_basis<Mesh, T>::size(k+1);
+            auto fbs = face_basis<Mesh, T>::size(k);
+            for (auto cl : msh.cells)
+            {
+                T hT = diameter(msh, cl);
+
+                /////////  CELL PROJECTION
+                // basis functions
+                cell_basis<Mesh, T> cb(msh, cl, k+1);
+
+                // local mass matrix
+                Matrix<T, Dynamic, Dynamic> mass_T = make_mass_matrix(msh, cl, k+1);
+
+                // projection : right-hand side
+                Matrix<T, Dynamic, 1> RHS_T = Matrix<T, Dynamic, 1>::Zero(cbs);
+                auto qps_T = integrate(msh, cl, 2*(k+1));
+                for (auto& qp : qps_T)
+                {
+                    auto phi = cb.eval_basis(qp.first);
+                    RHS_T += qp.second * ref_fun(qp.first) * phi;
+                }
+
+                // computation of projection coefficients (cell)
+                auto M_ldlt = mass_T.ldlt();
+                Matrix<T, Dynamic, 1> U_T = M_ldlt.solve(RHS_T);
+
+                // computation of cell projection error
+                for (auto& qp : qps_T)
+                {
+                    auto phi = cb.eval_basis(qp.first);
+                    auto delta = ref_fun(qp.first) - phi.dot(U_T);
+                    error_T += qp.second * delta * delta;
+                }
+
+                // stabilization matrix
+                hho_degree_info hdi(k+1, k);
+                auto hho_stab = make_hho_naive_stabilization(msh, cl, hdi);
+
+                auto fcs = faces(msh, cl);
+                auto num_faces = fcs.size();
+                Matrix<T, Dynamic, 1> loc_vect
+                    = Matrix<T, Dynamic, 1>::Zero( cbs + num_faces * fbs );
+                loc_vect.head(cbs) = U_T;
+
+                ////////// FACE PROJECTION
+                for (size_t i = 0; i < fcs.size(); i++)
+                {
+                    auto fc = fcs[i];
+                    face_basis<Mesh, T> fb(msh, fc, k);
+
+                    Matrix<T, Dynamic, Dynamic> mass_F = make_mass_matrix(msh, fc, k);
+                    Matrix<T, Dynamic, 1> RHS_F = Matrix<T, Dynamic, 1>::Zero(fbs);
+                    auto qps_F = integrate(msh, fc, 2*k);
+                    for (auto& qp : qps_F)
+                    {
+                        auto phi_F = fb.eval_basis(qp.first);
+                        RHS_F += qp.second * ref_fun(qp.first) * phi_F;
+                    }
+
+                    // computation of projection coefficients (face)
+                    auto M_ldlt_F = mass_F.ldlt();
+                    Matrix<T, Dynamic, 1> U_F = M_ldlt_F.solve(RHS_F);
+
+
+                    ///////// Computation of errors
+                    // computation of face projection error
+                    auto qps_F_bis = integrate(msh, fc, 2*(k+1));
+                    for (auto& qp : qps_F_bis)
+                    {
+                        auto phi_F = fb.eval_basis(qp.first);
+                        auto delta = ref_fun(qp.first) - phi_F.dot(U_F);
+                        error_F += hT * qp.second * delta * delta;
+                    }
+                    // computation of the stabilization error
+
+                    loc_vect.block(cbs+i*fbs, 0, fbs, 1) = U_F;
+                }
+                auto loc_error = (hho_stab * loc_vect).dot(loc_vect);
+                if( loc_error < 0)
+                {
+                    // std::cout << bold << green << "!!!!! loc_error < 0 !!!!! : "
+                    //           << loc_error << std::endl;
+                    error_stab -= loc_error;
+                }
+                else
+                    error_stab += loc_error;
+            }
+
+            std::cout << bold << red
+                      << "mesh_size = " << 1.0/N << std::endl;
+            std::cout << bold << yellow
+                      << "Errors : proj_cells = " << sqrt(error_T) << std::endl;
+            std::cout << "         proj_faces = " << sqrt(error_F) << std::endl;
+            std::cout << "         stab_error = " << sqrt(error_stab) << std::endl;
+        }
+    }
+}
 
 
 //////////////////////////   END  TESTS   /////////////////////////////
@@ -4085,6 +4232,7 @@ void convergence_test(void)
 int main(int argc, char **argv)
 {
     convergence_test();
+    // tests_stabilization();
     return 1;
 }
 #endif
