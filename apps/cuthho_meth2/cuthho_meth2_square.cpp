@@ -1719,9 +1719,11 @@ public:
         {
             H1 = 0.0;
             L2 = 0.0;
+            cond = 0.0;
         }
-    T H1;
-    T L2;
+    T H1; // H1-error
+    T L2; // L2-error
+    T cond; // condition number
 };
 
 
@@ -4011,13 +4013,34 @@ run_cuthho_interface(const Mesh& msh, const Function& level_set_function, size_t
     postoutput.add_object(diff_gp);
     postoutput.write();
 
-    tc.toc();
-    std::cout << bold << yellow << "Postprocessing: " << tc << " seconds" << reset << std::endl;
 
 
     test_info<RealType> TI;
     TI.H1 = std::sqrt(H1_error);
     TI.L2 = std::sqrt(L2_error);
+
+    // compute condition number
+    if (true)
+    {
+        Matrix<RealType, Dynamic, Dynamic> Mat;
+        if (sc)
+            Mat = assembler_sc.LHS;
+        else
+            Mat = assembler.LHS;
+
+        Eigen::JacobiSVD< Matrix<RealType, Dynamic, Dynamic> > svd(Mat);
+        RealType sigma_max = svd.singularValues()(0);
+        RealType sigma_min = svd.singularValues()(svd.singularValues().size()-1);
+        auto cond =  sigma_max / sigma_min;
+        TI.cond = cond;
+        std::cout << "sigma_max = " << sigma_max << "   sigma_min = "
+                  << sigma_min << "  cond = " << cond
+                  << std::endl;
+    }
+
+    tc.toc();
+    std::cout << bold << yellow << "Postprocessing: " << tc << " seconds" << reset << std::endl;
+
 
     return TI;
 }
@@ -4192,10 +4215,10 @@ void convergence_test(void)
             if (it_msh == mesh_sizes.begin())
             {
                 // output << N << "\t" << h << "\t" << TI.H1 << "\t" << "."
-                //        << "\t" << TI.L2 << "\t" << "."
+                //        << "\t" << TI.L2 << "\t" << "." << "\t" << "0.0"
                 //        << std::endl;
                 output << N << "\t" << h << "\t" << TI.H1 << "\t" << "."
-                       << "\t" << TI.L2 << "\t" << "." << "\t" << "0.0"
+                       << "\t" << TI.L2 << "\t" << "." << "\t" << TI.cond
                        << std::endl;
             }
             else
@@ -4203,10 +4226,10 @@ void convergence_test(void)
                 T orderH = log(previous_H1 / TI.H1) / log(previous_h / h);
                 T orderL = log(previous_L2 / TI.L2) / log(previous_h / h);
                 // output << N << "\t" << h << "\t" << TI.H1 << "\t" << orderH
-                //        << "\t" << TI.L2 << "\t" << orderL
+                //        << "\t" << TI.L2 << "\t" << orderL << "\t" << "0.0"
                 //        << std::endl;
                 output << N << "\t" << h << "\t" << TI.H1 << "\t" << orderH
-                       << "\t" << TI.L2 << "\t" << orderL << "\t" << "0.0"
+                       << "\t" << TI.L2 << "\t" << orderL << "\t" << TI.cond
                        << std::endl;
             }
             previous_H1 = TI.H1;
