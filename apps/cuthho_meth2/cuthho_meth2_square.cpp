@@ -36,7 +36,7 @@
 #include <Eigen/SparseCore>
 #include <Eigen/SparseLU>
 #include <unsupported/Eigen/SparseExtra>
-
+#include <Spectra/SymEigsSolver.h>
 
 
 using namespace Eigen;
