@@ -52,7 +52,7 @@ struct cg_params
     std::string     histfile;
 
     cg_params() :
-        convergence_threshold(1e-9),
+        convergence_threshold(1e-14),
         divergence_threshold(100),
         max_iter(1000),
         verbose(false),

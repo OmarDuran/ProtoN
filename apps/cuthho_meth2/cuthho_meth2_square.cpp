@@ -37,7 +37,7 @@
 #include <Eigen/SparseLU>
 #include <unsupported/Eigen/SparseExtra>
 #include <Spectra/SymEigsSolver.h>
-
+#include <Spectra/MatOp/SparseSymMatProd.h>
 
 using namespace Eigen;
 
@@ -3522,7 +3522,7 @@ run_cuthho_interface(const Mesh& msh, const Function& level_set_function, size_t
     using RealType = typename Mesh::coordinate_type;
 
     /************** DEFINE PROBLEM RHS, SOLUTION AND BCS **************/
-#if 0 // test case 1 : a domain decomposition
+#if 1 // test case 1 : a domain decomposition
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
         return 2.0 * M_PI * M_PI * std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());
     };
@@ -3561,7 +3561,7 @@ run_cuthho_interface(const Mesh& msh, const Function& level_set_function, size_t
     parms.kappa_2 = 1.0;
 
 
-#elif 1 // test case 1 bis : another domain decomposition
+#elif 0 // test case 1 bis : another domain decomposition
     auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
         return 0.0;
     };
@@ -4019,24 +4019,48 @@ run_cuthho_interface(const Mesh& msh, const Function& level_set_function, size_t
     TI.H1 = std::sqrt(H1_error);
     TI.L2 = std::sqrt(L2_error);
 
-    // compute condition number
-    if (true)
+    if (false)
     {
-        Matrix<RealType, Dynamic, Dynamic> Mat;
+        /////////////// compute condition number
+        SparseMatrix<RealType> Mat;
+        // Matrix<RealType, Dynamic, Dynamic> Mat;
         if (sc)
             Mat = assembler_sc.LHS;
         else
             Mat = assembler.LHS;
 
-        Eigen::JacobiSVD< Matrix<RealType, Dynamic, Dynamic> > svd(Mat);
-        RealType sigma_max = svd.singularValues()(0);
-        RealType sigma_min = svd.singularValues()(svd.singularValues().size()-1);
-        auto cond =  sigma_max / sigma_min;
+
+        RealType sigma_max, sigma_min;
+
+        // Construct matrix operation object using the wrapper class SparseSymMatProd
+        Spectra::SparseSymMatProd<RealType> op(Mat);
+        // Construct eigen solver object, requesting the largest eigenvalue
+        Spectra::SymEigsSolver< RealType, Spectra::LARGEST_MAGN,
+                                Spectra::SparseSymMatProd<RealType> > max_eigs(&op, 1, 10);
+        max_eigs.init();
+        max_eigs.compute();
+        if(max_eigs.info() == Spectra::SUCCESSFUL)
+            sigma_max = max_eigs.eigenvalues()(0);
+
+
+        // Construct eigen solver object, requesting the smallest eigenvalue
+        Spectra::SymEigsSolver< RealType, Spectra::SMALLEST_MAGN,
+                                Spectra::SparseSymMatProd<RealType> > min_eigs(&op, 1, 10);
+
+        min_eigs.init();
+        min_eigs.compute();
+        if(min_eigs.info() == Spectra::SUCCESSFUL)
+            sigma_min = min_eigs.eigenvalues()(0);
+
+        // compute condition number
+        RealType cond = sigma_max / sigma_min;
         TI.cond = cond;
         std::cout << "sigma_max = " << sigma_max << "   sigma_min = "
                   << sigma_min << "  cond = " << cond
                   << std::endl;
     }
+    else
+        TI.cond = 0.0;
 
     tc.toc();
     std::cout << bold << yellow << "Postprocessing: " << tc << " seconds" << reset << std::endl;
@@ -4190,12 +4214,12 @@ void convergence_test(void)
             mip.Nx = N;
             mip.Ny = N;
             cuthho_poly_mesh<T> msh(mip);
-            size_t int_refsteps = 2;
+            size_t int_refsteps = 1;
             T radius = 1.0/3.0;
-            auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
+            // auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
             // auto level_set_function = carre_level_set<T>(1.05, -0.05, -0.05, 1.05);
             // auto level_set_function = carre_level_set<T>(1.0, -0.0, -0.0, 1.0);
-            // auto level_set_function = carre_level_set<T>(0.77, 0.23, 0.23, 0.77);
+            auto level_set_function = carre_level_set<T>(0.77, 0.23, 0.23, 0.77);
             detect_node_position(msh, level_set_function);
             detect_cut_faces(msh, level_set_function);
             detect_cut_cells(msh, level_set_function);
