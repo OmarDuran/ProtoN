@@ -1792,6 +1792,8 @@ test_integration(const cuthho_mesh<T, ET>& msh, const Function1& f, const Functi
 }
 
 
+/////////////////  END TESTS  //////////////////////////////
+
 
 
 template<typename T>
@@ -3514,6 +3516,493 @@ compute_interface_contrib(const cuthho_mesh<T, ET>& msh,
 }
 
 
+/////////////////////  TESTS   ////////////////////////////////
+
+//////  interface_residus
+// to test the interface problem
+void interface_residus(void)
+{
+    using T = double;
+
+    ///// TEST CASE
+        auto rhs_fun = [](const typename cuthho_poly_mesh<T>::point_type& pt) -> T {
+        return 2.0 * M_PI * M_PI * std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());
+    };
+    auto sol_fun = [](const typename cuthho_poly_mesh<T>::point_type& pt) -> T {
+        return std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());
+        //auto v = (pt.y() - 0.5) * 2.0;
+        //return pt.y();
+    };
+
+    auto sol_grad = [](const typename cuthho_poly_mesh<T>::point_type& pt) -> auto {
+        Matrix<T, 1, 2> ret;
+
+        ret(0) = M_PI * std::cos(M_PI*pt.x()) * std::sin(M_PI*pt.y());
+        ret(1) = M_PI * std::sin(M_PI*pt.x()) * std::cos(M_PI*pt.y());
+
+        return ret;
+    };
+
+    auto bcs_fun = [&](const typename cuthho_poly_mesh<T>::point_type& pt) -> T {
+        return sol_fun(pt);
+    };
+
+
+    auto dirichlet_jump = [](const typename cuthho_poly_mesh<T>::point_type& pt) -> T {
+        return 0.0;
+    };
+
+    auto neumann_jump = [](const typename cuthho_poly_mesh<T>::point_type& pt) -> T {
+        return 0.0;
+    };
+
+
+    struct params<T> parms;
+
+    parms.kappa_1 = 1.0;
+    parms.kappa_2 = 1.0;
+
+
+    timecounter tc;
+
+    //////// FIRST STEP : compute the solution on a fitted domain
+    tc.tic();
+    size_t N = 20;
+    size_t degree = 3;
+    size_t method = 3;
+    mesh_init_params<T> mip;
+    mip.Nx = N;
+    mip.Ny = N;
+    cuthho_poly_mesh<T> msh(mip);
+    size_t int_refsteps = 1;
+    auto level_set_function1 = carre_level_set<T>(1.05, -0.05, -0.05, 1.05);
+    detect_node_position(msh, level_set_function1);
+    detect_cut_faces(msh, level_set_function1);
+    detect_cut_cells(msh, level_set_function1);
+    detect_cell_agglo_set(msh, level_set_function1);
+    make_neighbors_info_cartesian(msh);
+    refine_interface(msh, level_set_function1, int_refsteps);
+    make_agglomeration(msh, level_set_function1);
+
+
+    hho_degree_info hdi(degree+1, degree);
+    auto assembler = make_interface_assembler(msh, hdi);
+    auto assembler_sc = make_interface_condensed_assembler(msh, hdi);
+
+    bool sc1 = true;   // static condensation for the first stage
+    bool sc2 = false;  // static condensation for the other stages
+
+    // compute the matrix
+    for (auto& cl : msh.cells)
+    {
+        auto contrib = compute_interface_contrib(msh, cl, level_set_function1, dirichlet_jump,
+                                                 neumann_jump, rhs_fun, method, hdi, parms);
+        auto lc = contrib.first;
+        auto f = contrib.second;
+
+
+        if (location(msh, cl) != element_location::ON_INTERFACE)
+        {
+            if( sc1 )
+                assembler_sc.assemble(msh, cl, lc, f, bcs_fun);
+            else
+                assembler.assemble(msh, cl, lc, f, bcs_fun);
+        }
+        else
+        {
+            if( sc1 )
+                assembler_sc.assemble_cut(msh, cl, lc, f);
+            else
+                assembler.assemble_cut(msh, cl, lc, f);
+        }
+    }
+
+    if( sc1 )
+        assembler_sc.finalize();
+    else
+        assembler.finalize();
+
+#if 1
+    SparseLU<SparseMatrix<T>>  solver;
+    Matrix<T, Dynamic, 1> sol1;
+
+    if( sc1 )
+    {
+        solver.analyzePattern(assembler_sc.LHS);
+        solver.factorize(assembler_sc.LHS);
+        sol1 = solver.solve(assembler_sc.RHS);
+    }
+    else
+    {
+        solver.analyzePattern(assembler.LHS);
+        solver.factorize(assembler.LHS);
+        sol1 = solver.solve(assembler.RHS);
+    }
+#endif
+#if 0
+    Matrix<T, Dynamic, 1> sol1;
+    cg_params<T> cgp;
+    cgp.histfile = "cuthho_cg_hist.dat";
+    cgp.verbose = true;
+    cgp.apply_preconditioner = true;
+    if( sc1 )
+    {
+        sol1 = Matrix<T, Dynamic, 1>::Zero(assembler_sc.RHS.rows());
+        cgp.max_iter = assembler_sc.LHS.rows();
+        conjugated_gradient(assembler_sc.LHS, assembler_sc.RHS, sol1, cgp);
+    }
+    else
+    {
+        sol1 = Matrix<T, Dynamic, 1>::Zero(assembler.RHS.rows());
+        cgp.max_iter = assembler.LHS.rows();
+        conjugated_gradient(assembler.LHS, assembler.RHS, sol1, cgp);
+    }
+#endif
+
+
+    // if sc1 is used, then decondensate sol1 -> sol1_tot
+    Matrix<T, Dynamic, 1> sol1_tot = Matrix<T, Dynamic, 1>::Zero( assembler.RHS.rows() );
+    if (sc1)
+    {
+        auto cbs = cell_basis<cuthho_poly_mesh<T>,T>::size(hdi.cell_degree());
+        auto fbs = face_basis<cuthho_poly_mesh<T>,T>::size(hdi.face_degree());
+
+        size_t loc_offset = 0;
+        for (auto& cl : msh.cells)
+        {
+            cell_basis<cuthho_poly_mesh<T>, T> cb(msh, cl, hdi.cell_degree());
+            auto fcs = faces(msh, cl);
+            auto num_faces = fcs.size();
+
+            Matrix<T, Dynamic, 1> locdata, locdata_n, locdata_p;
+
+            if (location(msh, cl) == element_location::ON_INTERFACE)
+            {
+                auto contrib = compute_interface_contrib(
+                    msh, cl, level_set_function1, dirichlet_jump,
+                    neumann_jump, rhs_fun, method, hdi, parms);
+                auto lc = contrib.first;
+                auto f = contrib.second;
+
+                locdata_n = assembler_sc.take_local_data(msh, cl, sol1, bcs_fun, element_location::IN_NEGATIVE_SIDE, lc, f);
+                locdata_p = assembler_sc.take_local_data(msh, cl, sol1, bcs_fun, element_location::IN_POSITIVE_SIDE, lc, f);
+
+                sol1_tot.block(loc_offset * cbs, 0, cbs, 1) = locdata_n.head(cbs);
+                loc_offset++;
+                sol1_tot.block(loc_offset * cbs, 0, cbs, 1) = locdata_p.head(cbs);
+                loc_offset++;
+            }
+            else
+            {
+                auto contrib = compute_interface_contrib(
+                    msh, cl, level_set_function1, dirichlet_jump,
+                    neumann_jump, rhs_fun, method, hdi, parms);
+                auto lc = contrib.first;
+                auto f = contrib.second;
+
+                locdata = assembler_sc.take_local_data(msh, cl, sol1, bcs_fun, element_location::IN_POSITIVE_SIDE, lc, f);
+
+                sol1_tot.block(loc_offset * cbs, 0, cbs, 1) = locdata.head(cbs);
+                loc_offset++;
+            }
+        }
+
+        size_t FACES_OFFSET = loc_offset * cbs;
+        loc_offset = 0;
+
+        for (auto& fc : msh.faces)
+        {
+            if (fc.is_boundary && fc.bndtype == boundary::DIRICHLET)
+                continue;
+
+            if (location(msh, fc) == element_location::ON_INTERFACE)
+            {
+                sol1_tot.block(FACES_OFFSET + loc_offset*fbs, 0, 2*fbs, 1)
+                    = sol1.block(loc_offset*fbs, 0, 2*fbs, 1);
+
+                loc_offset = loc_offset + 2;
+            }
+            else
+            {
+                sol1_tot.block(FACES_OFFSET + loc_offset*fbs, 0, fbs, 1)
+                    = sol1.block(loc_offset*fbs, 0, fbs, 1);
+
+                loc_offset++;
+            }
+        }
+    }
+    else
+        sol1_tot = sol1;
+
+    tc.toc();
+    std::cout << bold << yellow << "Step One : " << tc << " seconds" << reset << std::endl;
+    //////// SECOND STEP : double the unknowns on the cut cells
+    ///  No agglomeration at the moment
+    tc.tic();
+
+    // new mesh
+    cuthho_poly_mesh<T> msh2(mip);
+    auto level_set_function2 = carre_level_set<T>(0.77, 0.23, 0.23, 0.77);
+    detect_node_position(msh2, level_set_function2);
+    detect_cut_faces(msh2, level_set_function2);
+    detect_cut_cells(msh2, level_set_function2);
+    detect_cell_agglo_set(msh2, level_set_function2);
+    make_neighbors_info_cartesian(msh2);
+    refine_interface(msh2, level_set_function2, int_refsteps);
+    // make_agglomeration(msh2, level_set_function2);
+
+    // new solution -> transfert sol1_tot in sol2_tot
+    auto assembler2 = make_interface_assembler(msh2, hdi);
+    auto assembler2_sc = make_interface_condensed_assembler(msh2, hdi);
+
+    Matrix<T, Dynamic, 1> sol2_tot = Matrix<T, Dynamic, 1>::Zero( assembler2.RHS.rows() );
+
+    auto celdeg = hdi.cell_degree();
+    auto facdeg = hdi.face_degree();
+    auto cbs = cell_basis<cuthho_poly_mesh<T>,T>::size(celdeg);
+    auto fbs = face_basis<cuthho_poly_mesh<T>,T>::size(facdeg);
+
+    size_t offset1 = 0;
+    size_t offset2 = 0;
+    for (auto& cl : msh2.cells)
+    {
+
+        if (location(msh2, cl) == element_location::ON_INTERFACE)
+        {
+            sol2_tot.block(offset2*cbs, 0, cbs, 1) = sol1_tot.block(offset1*cbs, 0, cbs, 1);
+            sol2_tot.block((offset2+1)*cbs, 0, cbs, 1) = sol1_tot.block(offset1*cbs, 0, cbs, 1);
+
+            offset2 = offset2 + 2;
+        }
+        else
+        {
+            sol2_tot.block(offset2*cbs, 0, cbs, 1) = sol1_tot.block(offset1*cbs, 0, cbs, 1);
+
+            offset2++;
+        }
+        offset1++;
+    }
+
+    size_t FACE_OFFSET1 = offset1 * cbs;
+    size_t FACE_OFFSET2 = offset2 * cbs;
+    offset1 = 0;
+    offset2 = 0;
+    for (auto& fc : msh2.faces)
+    {
+        if (fc.is_boundary && fc.bndtype == boundary::DIRICHLET)
+            continue;
+
+        if (location(msh2, fc) == element_location::ON_INTERFACE)
+        {
+            sol2_tot.block(FACE_OFFSET2 + offset2*fbs, 0, fbs, 1)
+                = sol1_tot.block(FACE_OFFSET1 + offset1*fbs, 0, fbs, 1);
+            sol2_tot.block(FACE_OFFSET2 + (offset2+1)*fbs, 0, fbs, 1)
+                = sol1_tot.block(FACE_OFFSET1 + offset1*fbs, 0, fbs, 1);
+
+            offset2 = offset2 + 2;
+        }
+        else
+        {
+            sol2_tot.block(FACE_OFFSET2 + offset2*fbs, 0, fbs, 1)
+                = sol1_tot.block(FACE_OFFSET1 + offset1*fbs, 0, fbs, 1);
+
+            offset2++;
+        }
+        offset1++;
+    }
+
+
+    Matrix<T, Dynamic, 1> sol2;
+    if (sc2)
+    {
+        sol2 = Matrix<T, Dynamic, 1>::Zero(assembler2_sc.RHS.rows());
+
+        throw std::logic_error("sc2 = true not available yet");
+    }
+    else
+        sol2 = sol2_tot;
+
+    tc.toc();
+    std::cout << bold << yellow << "Step Two : " << tc << " seconds" << reset << std::endl;
+
+    //////// THIRD STEP : compute the matrix associated to the cut mesh
+    tc.tic();
+    for (auto& cl : msh2.cells)
+    {
+        auto contrib = compute_interface_contrib(msh2, cl, level_set_function2, dirichlet_jump,
+                                                 neumann_jump, rhs_fun, method, hdi, parms);
+        auto lc = contrib.first;
+        auto f = contrib.second;
+
+
+        if (location(msh2, cl) != element_location::ON_INTERFACE)
+        {
+            if( sc2 )
+                assembler2_sc.assemble(msh2, cl, lc, f, bcs_fun);
+            else
+                assembler2.assemble(msh2, cl, lc, f, bcs_fun);
+        }
+        else
+        {
+            if( sc2 )
+                assembler2_sc.assemble_cut(msh2, cl, lc, f);
+            else
+                assembler2.assemble_cut(msh2, cl, lc, f);
+        }
+    }
+
+    if( sc2 )
+        assembler2_sc.finalize();
+    else
+        assembler2.finalize();
+
+    SparseMatrix<T> Mat2;
+    Matrix<T, Dynamic, 1> RHS2;
+    if( sc2 )
+    {
+        Mat2 = assembler2_sc.LHS;
+        RHS2 = assembler2_sc.RHS;
+    }
+    else
+    {
+        Mat2 = assembler2.LHS;
+        RHS2 = assembler2.RHS;
+    }
+
+    tc.toc();
+    std::cout << bold << yellow << "Step Three : " << tc << " seconds" << reset << std::endl;
+
+    ///////////  FOURTH STEP : compute the residual
+    tc.tic();
+    auto res = Mat2 * sol2 - RHS2;
+
+    tc.toc();
+    std::cout << bold << yellow << "Step Four : " << tc << " seconds" << reset << std::endl;
+
+    ///////////  FIFTH STEP : output the residual
+    tc.tic();
+
+    postprocess_output<T>  postoutput;
+
+    auto res_gp  = std::make_shared< gnuplot_output_object<T> >("test_res.dat");
+    auto sol2_gp  = std::make_shared< gnuplot_output_object<T> >("test_sol2.dat");
+
+
+    for (auto& cl : msh2.cells)
+    {
+        cell_basis<cuthho_poly_mesh<T>, T> cb(msh2, cl, hdi.cell_degree());
+        auto cbs = cb.size();
+        auto fcs = faces(msh2, cl);
+        auto num_faces = fcs.size();
+        auto fbs = face_basis<cuthho_poly_mesh<T>,T>::size(hdi.face_degree());
+
+        Matrix<T, Dynamic, 1> locdata_n, locdata_p, locdata;
+        Matrix<T, Dynamic, 1> locdata2_n, locdata2_p, locdata2;
+        Matrix<T, Dynamic, 1> cell_dofs_n, cell_dofs_p, cell_dofs;
+        Matrix<T, Dynamic, 1> cell_dofs2_n, cell_dofs2_p, cell_dofs2;
+
+        if (location(msh2, cl) == element_location::ON_INTERFACE)
+        {
+            if( sc2 )
+            {
+                auto contrib = compute_interface_contrib(
+                    msh2, cl, level_set_function2, dirichlet_jump,
+                    neumann_jump, rhs_fun, method, hdi, parms);
+                auto lc = contrib.first;
+                auto f_bis = contrib.second;
+                Matrix<T, Dynamic, 1> f = Matrix<T, Dynamic, 1>::Zero(contrib.second.rows());
+
+                locdata_n = assembler2_sc.take_local_data(msh2, cl, res, bcs_fun, element_location::IN_NEGATIVE_SIDE, lc, f);
+                locdata_p = assembler2_sc.take_local_data(msh2, cl, res, bcs_fun, element_location::IN_POSITIVE_SIDE, lc, f);
+
+                locdata2_n = assembler2_sc.take_local_data(msh2, cl, sol2, bcs_fun, element_location::IN_NEGATIVE_SIDE, lc, f_bis);
+                locdata2_p = assembler2_sc.take_local_data(msh2, cl, sol2, bcs_fun, element_location::IN_POSITIVE_SIDE, lc, f_bis);
+            }
+            else
+            {
+                locdata_n = assembler2.take_local_data(msh2, cl, res, bcs_fun, element_location::IN_NEGATIVE_SIDE);
+                locdata_p = assembler2.take_local_data(msh2, cl, res, bcs_fun, element_location::IN_POSITIVE_SIDE);
+
+                locdata2_n = assembler2.take_local_data(msh2, cl, sol2, bcs_fun, element_location::IN_NEGATIVE_SIDE);
+                locdata2_p = assembler2.take_local_data(msh2, cl, sol2, bcs_fun, element_location::IN_POSITIVE_SIDE);
+            }
+
+            cell_dofs_n = locdata_n.head(cbs);
+            cell_dofs_p = locdata_p.head(cbs);
+
+            cell_dofs2_n = locdata2_n.head(cbs);
+            cell_dofs2_p = locdata2_p.head(cbs);
+
+            auto qps_n = integrate(msh2, cl, hdi.cell_degree(), element_location::IN_NEGATIVE_SIDE);
+            for (auto& qp : qps_n)
+            {
+                auto t_phi = cb.eval_basis( qp.first );
+                auto v = cell_dofs_n.dot(t_phi);
+                res_gp->add_data(qp.first, v);
+
+                auto v2 = cell_dofs2_n.dot(t_phi);
+                sol2_gp->add_data(qp.first, v2);
+            }
+
+            auto qps_p = integrate(msh2, cl, hdi.cell_degree(), element_location::IN_POSITIVE_SIDE);
+            for (auto& qp : qps_p)
+            {
+                auto t_phi = cb.eval_basis( qp.first );
+                auto v = cell_dofs_p.dot(t_phi);
+                res_gp->add_data(qp.first, v);
+
+                auto v2 = cell_dofs2_p.dot(t_phi);
+                sol2_gp->add_data(qp.first, v2);
+            }
+        }
+        else
+        {
+            if( sc2 )
+            {
+                auto contrib = compute_interface_contrib(
+                    msh2, cl, level_set_function2, dirichlet_jump,
+                    neumann_jump, rhs_fun, method, hdi, parms);
+                auto lc = contrib.first;
+                auto f_bis = contrib.second;
+                Matrix<T, Dynamic, 1> f = Matrix<T, Dynamic, 1>::Zero(contrib.second.rows());
+
+                locdata = assembler2_sc.take_local_data(msh2, cl, res, bcs_fun, element_location::IN_POSITIVE_SIDE, lc, f);
+
+                locdata2 = assembler2_sc.take_local_data(msh2, cl, sol2, bcs_fun, element_location::IN_POSITIVE_SIDE, lc, f_bis);
+            }
+            else
+            {
+                locdata = assembler2.take_local_data(msh2, cl, res, bcs_fun, element_location::IN_POSITIVE_SIDE);
+                locdata2 = assembler2.take_local_data(msh2, cl, sol2, bcs_fun, element_location::IN_POSITIVE_SIDE);
+            }
+            cell_dofs = locdata.head(cbs);
+            cell_dofs2 = locdata2.head(cbs);
+
+            auto qps = integrate(msh2, cl, hdi.cell_degree());
+            for (auto& qp : qps)
+            {
+                auto t_phi = cb.eval_basis( qp.first );
+                auto v = cell_dofs.dot(t_phi);
+                res_gp->add_data(qp.first, v);
+
+                auto v2 = cell_dofs2.dot(t_phi);
+                sol2_gp->add_data(qp.first, v2);
+            }
+        }
+    }
+
+    postoutput.add_object(sol2_gp);
+    postoutput.add_object(res_gp);
+    postoutput.write();
+
+    tc.toc();
+    std::cout << bold << yellow << "Step Five : " << tc << " seconds" << reset << std::endl;
+}
+
+////////////////////  END TESTS  //////////////////////////////
+
+
+
 template<typename Mesh, typename Function>
 test_info<typename Mesh::coordinate_type>
 run_cuthho_interface(const Mesh& msh, const Function& level_set_function, size_t degree,
@@ -4280,6 +4769,7 @@ int main(int argc, char **argv)
 {
     convergence_test();
     // tests_stabilization();
+    // interface_residus();
     return 1;
 }
 #endif
