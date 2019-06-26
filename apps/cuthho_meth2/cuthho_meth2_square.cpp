@@ -1878,10 +1878,14 @@ class fict_condensed_assembler
     using T = typename Mesh::coordinate_type;
     std::vector<size_t>                 compress_table;
     std::vector<size_t>                 expand_table;
+    std::vector<size_t>                 compress_cells_table;
 
     hho_degree_info                     di;
 
     std::vector< Triplet<T> >           triplets;
+
+    std::vector< Matrix<T, Dynamic, Dynamic> > loc_LHS;
+    std::vector< Matrix<T, Dynamic, 1> > loc_RHS;
 
     element_location loc_zone;
 
@@ -1949,6 +1953,20 @@ public:
             }
         }
 
+        compress_cells_table.resize( msh.cells.size() );
+        compressed_offset = 0;
+        for (size_t i = 0; i < msh.cells.size(); i++)
+        {
+            auto cl = msh.cells[i];
+            if (location(msh, cl) == where || location(msh, cl) == element_location::ON_INTERFACE)
+            {
+                compress_cells_table.at(i) = compressed_offset;
+                compressed_offset++;
+            }
+        }
+        loc_LHS.resize( compressed_offset );
+        loc_RHS.resize( compressed_offset );
+
         auto facdeg = di.face_degree();
         auto fbs = face_basis<Mesh,T>::size(facdeg);
 
@@ -1971,6 +1989,15 @@ public:
              const Matrix<T, Dynamic, Dynamic>& lhs, const Matrix<T, Dynamic, 1>& rhs,
              const Function& dirichlet_bf)
     {
+        if( !(location(msh, cl) == loc_zone ||
+              location(msh, cl) == element_location::ON_INTERFACE) )
+            return;
+
+        // save local matrices
+        size_t cell_offset = compress_cells_table.at( offset(msh, cl) );
+        loc_LHS.at( cell_offset ) = lhs;
+        loc_RHS.at( cell_offset ) = rhs;
+
         auto celdeg = di.cell_degree();
         auto facdeg = di.face_degree();
 
@@ -2041,6 +2068,9 @@ public:
 
     } // assemble()
 
+    //// take_local_data
+    // loc_mat is the full loc matrix (cell + faces dofs)
+    // loc_rhs can be either cell rhs or full rhs
     template<typename Function>
     Matrix<T, Dynamic, 1>
     take_local_data(const Mesh& msh, const typename Mesh::cell_type& cl,
@@ -2082,6 +2112,21 @@ public:
 
         // Recover the full solution
         return static_condensation_recover(loc_mat, loc_rhs, cbs, f_dofs, solF);
+    }
+
+
+    //// take_local_data
+    // uses the local matrices stored previously
+    template<typename Function>
+    Matrix<T, Dynamic, 1>
+    take_local_data(const Mesh& msh, const typename Mesh::cell_type& cl,
+                    const Matrix<T, Dynamic, 1>& solution,
+                    const Function& dirichlet_bf)
+    {
+        size_t offset_cl = compress_cells_table.at( offset(msh, cl) );
+
+        return take_local_data(msh, cl, solution, dirichlet_bf, loc_LHS.at(offset_cl),
+                               loc_RHS.at(offset_cl));
     }
 
     void finalize(void)
@@ -2320,12 +2365,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         Matrix<RealType, Dynamic, 1> locdata;
         if( sc )
         {
-            auto gr = make_hho_gradrec_vector(msh, cl, level_set_function, hdi, where);
-            Matrix<RealType, Dynamic, Dynamic> stab = make_hho_cut_stabilization(msh, cl, hdi, where);            
-            Matrix<RealType, Dynamic, Dynamic> lc = gr.second + stab;
-            Matrix<RealType, Dynamic, 1> f = Matrix<RealType, Dynamic, 1>::Zero(lc.rows());
-            f = make_rhs(msh, cl, hdi.cell_degree(), rhs_fun, where, level_set_function, bcs_fun, gr.first);
-            locdata = assembler_sc.take_local_data(msh, cl, sol, sol_fun, lc, f);
+            locdata = assembler_sc.take_local_data(msh, cl, sol, sol_fun);
         }
         else
             locdata = assembler.take_local_data(msh, cl, sol, sol_fun);
@@ -2798,6 +2838,9 @@ class interface_condensed_assembler
 
     std::vector< Triplet<T> >           triplets;
 
+    std::vector< Matrix<T, Dynamic, Dynamic> > loc_LHS;
+    std::vector< Matrix<T, Dynamic, 1> > loc_RHS;
+
     class assembly_index
     {
         size_t  idx;
@@ -2876,6 +2919,9 @@ public:
 
         LHS = SparseMatrix<T>( system_size, system_size );
         RHS = Matrix<T, Dynamic, 1>::Zero( system_size );
+
+        loc_LHS.resize( msh.cells.size() );
+        loc_RHS.resize( msh.cells.size() );
     }
 
     void dump_tables() const
@@ -2893,6 +2939,11 @@ public:
     {
         if (location(msh, cl) == element_location::ON_INTERFACE)
             throw std::invalid_argument("UNcut cell expected.");
+
+        // save local matrices
+        size_t cell_offset = offset(msh, cl);
+        loc_LHS.at( cell_offset ) = lhs;
+        loc_RHS.at( cell_offset ) = rhs;
 
         auto celdeg = di.cell_degree();
         auto facdeg = di.face_degree();
@@ -2966,6 +3017,11 @@ public:
     {
         if (location(msh, cl) != element_location::ON_INTERFACE)
             throw std::invalid_argument("Cut cell expected.");
+
+        // save local matrices
+        size_t cell_offset = offset(msh, cl);
+        loc_LHS.at( cell_offset ) = lhs;
+        loc_RHS.at( cell_offset ) = rhs;
 
         auto celdeg = di.cell_degree();
         auto facdeg = di.face_degree();
@@ -3150,6 +3206,20 @@ public:
         }
 
         return ret;
+    }
+
+
+    //// take_local_data
+    // uses the local matrices stored previously
+    template<typename Function>
+    Matrix<T, Dynamic, 1>
+    take_local_data(const Mesh& msh, const typename Mesh::cell_type& cl,
+                    const Matrix<T, Dynamic, 1>& solution,
+                    const Function& dirichlet_bf, const element_location where)
+    {
+        size_t offset_cl = offset(msh, cl);
+        return take_local_data(msh, cl, solution, dirichlet_bf, where, loc_LHS.at(offset_cl),
+                               loc_RHS.at(offset_cl));
     }
 
     void finalize(void)
@@ -4396,14 +4466,8 @@ run_cuthho_interface(const Mesh& msh, const Function& level_set_function, size_t
         {
             if( sc )
             {
-                auto contrib = compute_interface_contrib(
-                    msh, cl, level_set_function, dirichlet_jump,
-                    neumann_jump, rhs_fun, method, hdi, parms);
-                auto lc = contrib.first;
-                auto f = contrib.second;
-
-                locdata_n = assembler_sc.take_local_data(msh, cl, sol, bcs_fun, element_location::IN_NEGATIVE_SIDE, lc, f);
-                locdata_p = assembler_sc.take_local_data(msh, cl, sol, bcs_fun, element_location::IN_POSITIVE_SIDE, lc, f);
+                locdata_n = assembler_sc.take_local_data(msh, cl, sol, bcs_fun, element_location::IN_NEGATIVE_SIDE);
+                locdata_p = assembler_sc.take_local_data(msh, cl, sol, bcs_fun, element_location::IN_POSITIVE_SIDE);
             }
             else
             {
@@ -4460,12 +4524,7 @@ run_cuthho_interface(const Mesh& msh, const Function& level_set_function, size_t
         {
             if( sc )
             {
-                auto contrib = compute_interface_contrib(
-                    msh, cl, level_set_function, dirichlet_jump,
-                    neumann_jump, rhs_fun, method, hdi, parms);
-                auto lc = contrib.first;
-                auto f = contrib.second;
-                locdata = assembler_sc.take_local_data(msh, cl, sol, bcs_fun, element_location::IN_POSITIVE_SIDE, lc, f);
+                locdata = assembler_sc.take_local_data(msh, cl, sol, bcs_fun, element_location::IN_POSITIVE_SIDE);
             }
             else
                 locdata = assembler.take_local_data(msh, cl, sol, bcs_fun, element_location::IN_POSITIVE_SIDE);
