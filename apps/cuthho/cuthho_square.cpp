@@ -218,14 +218,6 @@ void test_triangulation(const cuthho_mesh<T, ET>& msh)
     ofs.close();
 }
 
-template<typename T>
-struct params
-{
-    T kappa_1, kappa_2, eta;
-
-    params() : kappa_1(1.0), kappa_2(1.0), eta(5.0) {}
-};
-
 template<typename T, size_t ET>
 T
 cell_eta(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl)
