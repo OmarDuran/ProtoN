@@ -27,3 +27,4 @@
 #include "core_bits/bases.hpp"
 #include "core_bits/quadratures.hpp"
 #include "core_bits/utils.hpp"
+#include "core_bits/level_set.hpp"
