@@ -1998,12 +1998,20 @@ auto make_fict_condensed_assembler(const Mesh& msh, hho_degree_info hdi, element
 
 
 
-template<typename Mesh, typename Function>
+template<typename Mesh, typename testType>
 test_info<typename Mesh::coordinate_type>
-run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t degree)
+run_cuthho_fictdom(const Mesh& msh, size_t degree, testType test_case)
 {
     using RealType = typename Mesh::coordinate_type;
 
+    auto level_set_function = test_case.level_set_;
+
+    // auto rhs_fun = test_case.rhs_fun;    
+    // auto sol_fun = test_case.sol_fun;
+    // auto sol_grad = test_case.sol_grad;
+    // auto bcs_fun = test_case.bcs_fun;
+    
+    
     /************** OPEN SILO DATABASE **************/
     silo_database silo;
     silo.create("cuthho_fictdom.silo");
@@ -2083,6 +2091,9 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
     };
 #endif
 
+
+    
+    
     timecounter tc;
 
     bool sc = true; // static condensation
@@ -2143,7 +2154,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
 
     /************** SOLVE **************/
     tc.tic();
-#if 0
+#if 1
     SparseLU<SparseMatrix<RealType>>  solver;
     Matrix<RealType, Dynamic, 1> sol;
 
@@ -2160,7 +2171,7 @@ run_cuthho_fictdom(const Mesh& msh, const Function& level_set_function, size_t d
         sol = solver.solve(assembler.RHS);
     }
 #endif
-#if 1
+#if 0
     Matrix<RealType, Dynamic, 1> sol;
     cg_params<RealType> cgp;
     cgp.histfile = "cuthho_cg_hist.dat";
@@ -4379,12 +4390,14 @@ void convergence_test(void)
             if(1) // sin(\pi x) * sin(\pi y)
             {
                 auto test_case = make_test_case_laplacian_sin_sin(msh, level_set_function);
-                TI = run_cuthho_interface(msh, k, 3, test_case);
+                // TI = run_cuthho_interface(msh, k, 3, test_case);
+                TI = run_cuthho_fictdom(msh, k, test_case);
             }
             if(0) // exp(x) * cos(y)
             {
                 auto test_case = make_test_case_laplacian_exp_cos(msh, level_set_function);
-                TI = run_cuthho_interface(msh, k, 3, test_case);
+                // TI = run_cuthho_interface(msh, k, 3, test_case);
+                TI = run_cuthho_fictdom(msh, k, test_case);
             }
             if(0) // jumps sin_sin -> exp_cos
             {
