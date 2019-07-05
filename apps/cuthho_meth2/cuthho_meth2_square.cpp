@@ -1367,19 +1367,33 @@ make_rhs(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_
         auto qpsi = integrate_interface(msh, cl, 2*degree, element_location::IN_NEGATIVE_SIDE);
         for (auto& qp : qpsi)
         {
-            auto phi = cb.eval_basis(qp.first);
-            auto dphi = cb.eval_gradients(qp.first);
-            auto n = level_set_function.normal(qp.first);
-            const auto g_phi  = gb.eval_basis(qp.first);
+            const auto phi = cb.eval_basis(qp.first);
+            // auto dphi = cb.eval_gradients(qp.first);
+            // const auto n = level_set_function.normal(qp.first);
+            // const auto g_phi  = gb.eval_basis(qp.first);
             
             ret.block(0, 0, cbs, 1)
                 += qp.second * bcs(qp.first) * phi * cell_eta(msh, cl)/hT;
             
+            // source_vect += qp.second * bcs(qp.first) * g_phi * n;
+        }
+        
+        auto qpsi2 = integrate_interface(msh, cl, 2*degree - 1, element_location::IN_NEGATIVE_SIDE);
+        for (auto& qp : qpsi2)
+        {
+            // auto phi = cb.eval_basis(qp.first);
+            // auto dphi = cb.eval_gradients(qp.first);
+            const auto n = level_set_function.normal(qp.first);
+            const auto g_phi  = gb.eval_basis(qp.first);
+            
+            // ret.block(0, 0, cbs, 1)
+            //     += qp.second * bcs(qp.first) * phi * cell_eta(msh, cl)/hT;
+            
             source_vect += qp.second * bcs(qp.first) * g_phi * n;
         }
 
-
-        grad_term = source_vect.transpose() * GR;
+        // grad_term = source_vect.transpose() * GR;
+        grad_term += GR.transpose() * source_vect;
 
         ret -= grad_term;
 
@@ -4324,8 +4338,8 @@ void convergence_test(void)
 
             // auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
             // auto level_set_function = square_level_set<T>(1.05, -0.05, -0.05, 1.05);
-            auto level_set_function = square_level_set<T>(1.0, -0.0, -0.0, 1.0);
-            // auto level_set_function = square_level_set<T>(0.77, 0.23, 0.23, 0.77);
+            // auto level_set_function = square_level_set<T>(1.0, -0.0, -0.0, 1.0);
+            auto level_set_function = square_level_set<T>(0.77, 0.23, 0.23, 0.77);
             detect_node_position(msh, level_set_function);
             detect_cut_faces(msh, level_set_function);
             if(0)  // AGGLOMERATION
@@ -4352,6 +4366,23 @@ void convergence_test(void)
             if(1) // sin(\pi x) * sin(\pi y)
             {
                 auto test_case = make_test_case_laplacian_sin_sin(msh, level_set_function);
+                // TI = run_cuthho_interface(msh, k, 3, test_case);
+                TI = run_cuthho_fictdom(msh, k, test_case);
+            }
+            if(0) // 1 + sin(\pi x) * sin(\pi y)
+            {
+                auto test_case = make_test_case_laplacian_sin_sin_bis(msh, level_set_function);
+                // TI = run_cuthho_interface(msh, k, 3, test_case);
+                TI = run_cuthho_fictdom(msh, k, test_case);
+            }
+            if(0) // sin(\pi (x-a)/(b-a)) * sin(\pi (y-c)/(d-c))
+            {
+                T a = 0.23;
+                T b = 0.77;
+                T c = 0.23;
+                T d = 0.77;
+                auto test_case = make_test_case_laplacian_sin_sin_gen(msh, level_set_function,
+                                                                      a, b, c, d);
                 // TI = run_cuthho_interface(msh, k, 3, test_case);
                 TI = run_cuthho_fictdom(msh, k, test_case);
             }

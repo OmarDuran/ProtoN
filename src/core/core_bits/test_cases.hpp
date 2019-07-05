@@ -110,6 +110,78 @@ auto make_test_case_laplacian_sin_sin(const Mesh& msh, Function level_set_functi
 }
 
 
+///// test_case_laplacian_sin_sin_bis
+// exact solution : 1 + sin(\pi x) * sin(\pi y) in the whole domain
+// \kappa_1 = \kappa_2 = 1
+template<typename T, typename Function, typename Mesh>
+class test_case_laplacian_sin_sin_bis: public test_case_laplacian<T, Function, Mesh>
+{
+   public:
+    test_case_laplacian_sin_sin_bis(Function level_set__)
+        : test_case_laplacian<T, Function, Mesh>
+        (level_set__, params<T>(),
+         [](const typename Mesh::point_type& pt) -> T { // sol
+            return 1 + std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());},
+         [](const typename Mesh::point_type& pt) -> T { // rhs
+             return 2.0 * M_PI * M_PI * std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());},
+         [](const typename Mesh::point_type& pt) -> T { // bcs
+             return 1 + std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());},
+         [](const typename Mesh::point_type& pt) -> auto { // grad
+             Matrix<T, 1, 2> ret;
+             ret(0) = M_PI * std::cos(M_PI*pt.x()) * std::sin(M_PI*pt.y());
+             ret(1) = M_PI * std::sin(M_PI*pt.x()) * std::cos(M_PI*pt.y());
+             return ret;},
+         [](const typename Mesh::point_type& pt) -> T {/* Dir */ return 0.0;},
+         [](const typename Mesh::point_type& pt) -> T {/* Neu */ return 0.0;})
+        {}
+};
+
+template<typename Mesh, typename Function>
+auto make_test_case_laplacian_sin_sin_bis(const Mesh& msh, Function level_set_function)
+{
+    return test_case_laplacian_sin_sin_bis<typename Mesh::coordinate_type, Function, Mesh>(level_set_function);
+}
+
+
+///// test_case_laplacian_sin_sin_gen
+// exact solution : sin(\pi (x-a)/(b-a)) * sin(\pi (y-c)/(d-c)) in the whole domain
+// \kappa_1 = \kappa_2 = 1
+template<typename T, typename Function, typename Mesh>
+class test_case_laplacian_sin_sin_gen: public test_case_laplacian<T, Function, Mesh>
+{
+   public:
+    test_case_laplacian_sin_sin_gen(Function level_set__, T a, T b, T c, T d)
+        : test_case_laplacian<T, Function, Mesh>
+        (level_set__, params<T>(),
+         [a,b,c,d](const typename Mesh::point_type& pt) -> T { // sol
+            return std::sin(M_PI*(pt.x()-a)/(b-a)) * std::sin(M_PI*(pt.y()-c)/(d-c));},
+         [a,b,c,d](const typename Mesh::point_type& pt) -> T { // rhs
+             return ( 1.0/((b-a)*(b-a))+1.0/((d-c)*(d-c)) )* M_PI * M_PI
+                 * std::sin(M_PI*(pt.x()-a)/(b-a)) * std::sin(M_PI*(pt.y()-c)/(d-c));},
+         [a,b,c,d](const typename Mesh::point_type& pt) -> T { // bcs
+             return std::sin(M_PI*(pt.x()-a)/(b-a)) * std::sin(M_PI*(pt.y()-c)/(d-c));},
+         [a,b,c,d](const typename Mesh::point_type& pt) -> auto { // grad
+             Matrix<T, 1, 2> ret;
+             ret(0) = (M_PI/(b-a))
+                 * std::cos(M_PI*(pt.x()-a)/(b-a)) * std::sin(M_PI*(pt.y()-c)/(d-c));
+             ret(1) = (M_PI/(d-c))
+                 * std::sin(M_PI*(pt.x()-a)/(b-a)) * std::cos(M_PI*(pt.y()-c)/(d-c));
+             return ret;},
+         [](const typename Mesh::point_type& pt) -> T {/* Dir */ return 0.0;},
+         [](const typename Mesh::point_type& pt) -> T {/* Neu */ return 0.0;}),
+        a_(a), b_(b), c_(c), d_(d)
+        {}
+    T a_, b_, c_, d_;
+};
+
+template<typename Mesh, typename Function, typename T>
+auto make_test_case_laplacian_sin_sin_gen(const Mesh& msh, Function level_set_function,
+                                          T a, T b, T c, T d)
+{
+    return test_case_laplacian_sin_sin_gen<T, Function, Mesh>(level_set_function, a, b, c, d);
+}
+
+
 
 ///// test_case_laplacian_exp_cos
 // exact solution : exp(x) * cos(y) in the whole domain
