@@ -937,7 +937,8 @@ make_hho_gradrec_vector(const cuthho_mesh<T, ET>& msh, const typename cuthho_mes
     {
         const auto fc = fcs[i];
         const auto n  = ns[i];
-        face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg);
+        // face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg);
+        cut_face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, facdeg, where);
         
 
         const auto qps_f = integrate(msh, fc, facdeg + std::max(facdeg, celdeg), where);
@@ -2006,10 +2007,10 @@ run_cuthho_fictdom(const Mesh& msh, size_t degree, testType test_case)
 
     auto level_set_function = test_case.level_set_;
 
-    // auto rhs_fun = test_case.rhs_fun;    
-    // auto sol_fun = test_case.sol_fun;
-    // auto sol_grad = test_case.sol_grad;
-    // auto bcs_fun = test_case.bcs_fun;
+    auto rhs_fun = test_case.rhs_fun;    
+    auto sol_fun = test_case.sol_fun;
+    auto sol_grad = test_case.sol_grad;
+    auto bcs_fun = test_case.bcs_fun;
     
     
     /************** OPEN SILO DATABASE **************/
@@ -2043,55 +2044,6 @@ run_cuthho_fictdom(const Mesh& msh, size_t degree, testType test_case)
     for (auto& n : msh.nodes)
         node_pos.push_back( location(msh, n) == element_location::IN_POSITIVE_SIDE ? +1.0 : -1.0 );
     silo.add_variable("mesh", "node_pos", node_pos.data(), node_pos.size(), nodal_variable_t);
-
-
-    /************** DEFINE PROBLEM RHS, SOLUTION AND BCS **************/
-#if 1
-    auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
-        return 2.0 * M_PI * M_PI * std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());
-    };
-
-    auto sol_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
-        return std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());
-    };
-
-    auto sol_grad = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
-        Matrix<RealType, 1, 2> ret;
-
-        ret(0) = M_PI * std::cos(M_PI*pt.x()) * std::sin(M_PI*pt.y());
-        ret(1) = M_PI * std::sin(M_PI*pt.x()) * std::cos(M_PI*pt.y());
-
-        return ret;
-    };
-
-    auto bcs_fun = [&](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
-        return sol_fun(pt);
-    };
-
-#elif 0
-    auto rhs_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
-        return 0.0;
-    };
-
-    auto sol_fun = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
-        return exp(pt.x()) * std::cos(pt.y());
-    };
-
-    auto sol_grad = [](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> auto {
-        Matrix<RealType, 1, 2> ret;
-
-        ret(0) = exp(pt.x()) * std::cos(pt.y());
-        ret(1) = - exp(pt.x()) * std::sin(pt.y());
-
-        return ret;
-    };
-
-    auto bcs_fun = [&](const typename cuthho_poly_mesh<RealType>::point_type& pt) -> RealType {
-        return sol_fun(pt);
-    };
-#endif
-
-
     
     
     timecounter tc;
@@ -4321,6 +4273,7 @@ void convergence_test(void)
     mesh_sizes.push_back(32);
     mesh_sizes.push_back(64);
     mesh_sizes.push_back(128);
+    mesh_sizes.push_back(256);
 
     // polynomial orders
     pol_orders.push_back(0);
@@ -4365,22 +4318,31 @@ void convergence_test(void)
             mip.Nx = N;
             mip.Ny = N;
             cuthho_poly_mesh<T> msh(mip);
-            size_t int_refsteps = 4;
+            size_t int_refsteps = 1;
             T radius = 1.0/3.0;
             auto circle_level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
 
-            auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
+            // auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
             // auto level_set_function = square_level_set<T>(1.05, -0.05, -0.05, 1.05);
-            // auto level_set_function = square_level_set<T>(1.0, -0.0, -0.0, 1.0);
+            auto level_set_function = square_level_set<T>(1.0, -0.0, -0.0, 1.0);
             // auto level_set_function = square_level_set<T>(0.77, 0.23, 0.23, 0.77);
             detect_node_position(msh, level_set_function);
             detect_cut_faces(msh, level_set_function);
-            detect_cut_cells(msh, level_set_function);
-            detect_cell_agglo_set(msh, level_set_function);
-            make_neighbors_info_cartesian(msh);
-            refine_interface(msh, level_set_function, int_refsteps);
-            make_agglomeration(msh, level_set_function);
-
+            if(0)  // AGGLOMERATION
+            {
+                detect_cut_cells(msh, level_set_function);
+                detect_cell_agglo_set(msh, level_set_function);
+                make_neighbors_info_cartesian(msh);
+                refine_interface(msh, level_set_function, int_refsteps);
+                make_agglomeration(msh, level_set_function);
+            }
+            else  // NODE DISPLACEMENT
+            {
+                move_nodes(msh, level_set_function);
+                detect_cut_faces(msh, level_set_function); //do it again to update intersection points
+                detect_cut_cells(msh, level_set_function);
+                refine_interface(msh, level_set_function, int_refsteps);
+            }
 
             // compute solution/errors
             test_info<T> TI;
