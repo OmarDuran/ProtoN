@@ -313,7 +313,7 @@ auto make_test_case_laplacian_jumps_2(const Mesh& msh, Function level_set_functi
     return test_case_laplacian_jumps_2<typename Mesh::coordinate_type, Function, Mesh>(level_set_function);
 }
 
-
+////////////////////  TESTS CASES FOR CIRCLES   ////////////////////////////
 
 ///// test_case_laplacian_contrast_2
 // !! available for circle_level_set only !!
@@ -415,4 +415,67 @@ template<typename Mesh>
 auto make_test_case_laplacian_contrast_6(const Mesh& msh, circle_level_set<typename Mesh::coordinate_type> LS, params<typename Mesh::coordinate_type> parms)
 {
     return test_case_laplacian_contrast_6<typename Mesh::coordinate_type, Mesh>(LS.radius, LS.alpha, LS.beta, parms);
+}
+
+
+
+///// test_case_laplacian_circle_hom
+// !! available for circle_level_set only !!
+// circle : radius = R, center = (a,b)
+// exact solution : (R - r) * r^n in the whole domain
+// coded here for n = 6
+// \kappa_1 = \kappa_2 = 1
+template<typename T, typename Mesh>
+class test_case_laplacian_circle_hom: public test_case_laplacian<T, circle_level_set<T>, Mesh>
+{
+   public:
+    test_case_laplacian_circle_hom(T R, T a, T b)
+        : test_case_laplacian<T, circle_level_set<T>, Mesh>
+        (circle_level_set<T>(R, a, b), params<T>(),
+         [R, a, b](const typename Mesh::point_type& pt) -> T { /* sol */
+            T x1 = pt.x() - a;
+            T x2 = x1 * x1;
+            T y1 = pt.y() - b;
+            T y2 = y1 * y1;
+            T r2 = x2 + y2;
+            T r1 = std::sqrt(r2);
+            return (R - r1) * r2 * r2 * r2;},
+         [R, a, b](const typename Mesh::point_type& pt) -> T { /* rhs */
+             T x1 = pt.x() - a;
+             T x2 = x1 * x1;
+             T y1 = pt.y() - b;
+             T y2 = y1 * y1;
+             T r2 = x2 + y2;
+             T r1 = std::sqrt(r2);
+             return (2 * 6 + 1) * r2 * r2 * r1 - 6*6 * (R-r1) * r2 * r2;},
+         [R, a, b](const typename Mesh::point_type& pt) -> T { // bcs
+             T x1 = pt.x() - a;
+             T x2 = x1 * x1;
+             T y1 = pt.y() - b;
+             T y2 = y1 * y1;
+             T r2 = x2 + y2;
+             T r1 = std::sqrt(r2);
+             return (R - r1) * r2 * r2 * r2;},
+         [R, a, b](const typename Mesh::point_type& pt) -> auto { // grad
+             Matrix<T, 1, 2> ret;
+             T x1 = pt.x() - a;
+             T x2 = x1 * x1;
+             T y1 = pt.y() - b;
+             T y2 = y1 * y1;
+             T r2 = x2 + y2;
+             T r1 = std::sqrt(r2);
+             T B = 6 * (R - r1) * r2 * r2 - r2 * r2 * r1;
+             ret(0) = B * x1;
+             ret(1) = B * y1;
+             return ret;},
+         [](const typename Mesh::point_type& pt) -> T {/* Dir */ return 0.0;},
+         [](const typename Mesh::point_type& pt) -> T {/* Neu */ return 0.0;})
+        {}
+};
+
+
+template<typename Mesh>
+auto make_test_case_laplacian_circle_hom(const Mesh& msh, circle_level_set<typename Mesh::coordinate_type> LS)
+{
+    return test_case_laplacian_circle_hom<typename Mesh::coordinate_type, Mesh>(LS.radius, LS.alpha, LS.beta);
 }

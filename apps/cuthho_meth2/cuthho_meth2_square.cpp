@@ -4332,17 +4332,17 @@ void convergence_test(void)
             mip.Nx = N;
             mip.Ny = N;
             cuthho_poly_mesh<T> msh(mip);
-            size_t int_refsteps = 1;
+            size_t int_refsteps = 4;
             T radius = 1.0/3.0;
             auto circle_level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
 
-            // auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
+            auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
             // auto level_set_function = square_level_set<T>(1.05, -0.05, -0.05, 1.05);
             // auto level_set_function = square_level_set<T>(1.0, -0.0, -0.0, 1.0);
-            auto level_set_function = square_level_set<T>(0.77, 0.23, 0.23, 0.77);
+            // auto level_set_function = square_level_set<T>(0.77, 0.23, 0.23, 0.77);
             detect_node_position(msh, level_set_function);
             detect_cut_faces(msh, level_set_function);
-            if(0)  // AGGLOMERATION
+            if(1)  // AGGLOMERATION
             {
                 detect_cut_cells(msh, level_set_function);
                 detect_cell_agglo_set(msh, level_set_function);
@@ -4363,7 +4363,7 @@ void convergence_test(void)
             // auto TI = run_cuthho_interface(msh, level_set_function, k, 3);
 
             // auto TI = run_cuthho_interface(msh, level_set_function, k, 3, test_case);
-            if(1) // sin(\pi x) * sin(\pi y)
+            if(0) // sin(\pi x) * sin(\pi y)
             {
                 auto test_case = make_test_case_laplacian_sin_sin(msh, level_set_function);
                 // TI = run_cuthho_interface(msh, k, 3, test_case);
@@ -4419,6 +4419,13 @@ void convergence_test(void)
 
                 auto test_case = make_test_case_laplacian_contrast_6(msh, circle_level_set_function, parms);
                 TI = run_cuthho_interface(msh, k, 3, test_case);
+            }
+
+            if(1) // homogeneous test case on a circle
+            {
+                auto test_case = make_test_case_laplacian_circle_hom(msh, circle_level_set_function);
+                // TI = run_cuthho_interface(msh, k, 3, test_case);
+                TI = run_cuthho_fictdom(msh, k, test_case);
             }
 
             // auto TI = run_cuthho_fictdom(msh, level_set_function, k);
