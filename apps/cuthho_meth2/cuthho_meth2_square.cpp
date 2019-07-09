@@ -620,8 +620,47 @@ template<typename T, size_t ET>
 T
 cell_eta(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl)
 {
-    return 30.0;
+    return 1000.0;
 }
+
+
+template<typename T, size_t ET, typename Function>
+Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>
+make_Nitsche(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl,
+             const Function& level_set_function, hho_degree_info di)
+{
+    auto celdeg = di.cell_degree();
+    auto facdeg = di.face_degree();
+
+    cell_basis<cuthho_mesh<T, ET>,T> cb(msh, cl, celdeg);
+    auto cbs = cb.size();
+    auto fbs = face_basis<cuthho_mesh<T, ET>,T>::size(facdeg);
+
+    auto fcs = faces(msh, cl);
+    auto num_faces = fcs.size();
+
+    auto size_tot = cbs + num_faces * fbs;
+
+    Matrix<T, Dynamic, Dynamic> ret = Matrix<T, Dynamic, Dynamic>::Zero(size_tot, size_tot);
+
+    if( !is_cut(msh, cl) )
+        return ret;
+
+    auto iqps = integrate_interface(msh, cl, 2*celdeg-1, element_location::IN_NEGATIVE_SIDE);
+    for (auto& qp : iqps)
+    {
+        const auto c_phi  = cb.eval_basis(qp.first);
+        const auto c_dphi  = cb.eval_gradients(qp.first);
+        const Matrix<T,2,1> n = level_set_function.normal(qp.first);
+        const auto c_dphi_n = c_dphi * n;
+
+        ret.block(0, 0, cbs, cbs) -= qp.second * c_phi * c_dphi_n.transpose();
+        ret.block(0, 0, cbs, cbs) -= qp.second * c_dphi_n * c_phi.transpose();
+    }
+
+    return ret;
+}
+
 
 template<typename T, size_t ET, typename Function>
 std::pair<   Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>,
@@ -761,7 +800,7 @@ make_hho_laplacian_interface(const cuthho_mesh<T, ET>& msh,
 
         Matrix<T, Dynamic, Dynamic> a = parms.kappa_1 * qp.second * phi * (dphi * n).transpose();
         Matrix<T, Dynamic, Dynamic> b = parms.kappa_1 * qp.second * (dphi * n) * phi.transpose();
-        Matrix<T, Dynamic, Dynamic> c = parms.kappa_1 * qp.second * phi * phi.transpose() * parms.eta / hT;
+        Matrix<T, Dynamic, Dynamic> c = parms.kappa_1 * qp.second * phi * phi.transpose() * cell_eta(msh, cl) / hT;
 
         stiff.block(  0,   0, rbs, rbs) -= a;
         stiff.block(rbs,   0, rbs, rbs) += a;
@@ -890,7 +929,7 @@ make_hho_gradrec_vector(const cuthho_mesh<T, ET>& msh, const typename cuthho_mes
 template<typename T, size_t ET, typename Function>
 std::pair<   Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>,
              Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, Dynamic>  >
-make_hho_gradrec_vector(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl, const Function& level_set_function, const hho_degree_info& di, element_location where)
+make_hho_gradrec_vector(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl, const Function& level_set_function, const hho_degree_info& di, element_location where, const size_t method = 1)
 {
 
     if ( !is_cut(msh, cl) )
@@ -955,16 +994,19 @@ make_hho_gradrec_vector(const cuthho_mesh<T, ET>& msh, const typename cuthho_mes
     }
 
 
-    const auto iqps = integrate_interface(msh, cl, celdeg + graddeg, element_location::IN_NEGATIVE_SIDE);
-    for (auto& qp : iqps)
+    if(method == 1)
     {
-        const auto c_phi        = cb.eval_basis(qp.first);
-        const auto g_phi        = gb.eval_basis(qp.first);
+        const auto iqps = integrate_interface(msh, cl, celdeg + graddeg, element_location::IN_NEGATIVE_SIDE);
+        for (auto& qp : iqps)
+        {
+            const auto c_phi        = cb.eval_basis(qp.first);
+            const auto g_phi        = gb.eval_basis(qp.first);
 
-        Matrix<T,2,1> n = level_set_function.normal(qp.first);
-        const vector_type qp_g_phi_n = qp.second * g_phi * n;
+            Matrix<T,2,1> n = level_set_function.normal(qp.first);
+            const vector_type qp_g_phi_n = qp.second * g_phi * n;
         
-        gr_rhs.block(0 , 0, gbs, cbs) -= qp_g_phi_n * c_phi.transpose();
+            gr_rhs.block(0 , 0, gbs, cbs) -= qp_g_phi_n * c_phi.transpose();
+        }
     }
     
     matrix_type oper = gr_lhs.ldlt().solve(gr_rhs);
@@ -1216,9 +1258,9 @@ make_hho_cut_stabilization(const cuthho_mesh<T, ET>& msh,
     {
         const auto c_phi  = cb.eval_basis(qp.first);
         
-        data.block(0, 0, cbs, cbs) += qp.second * c_phi * c_phi.transpose() * parms.eta / hT;
+        data.block(0, 0, cbs, cbs) += qp.second * c_phi * c_phi.transpose() * cell_eta(msh, cl) / hT;
     }
-    
+
     return data;
 }
 
@@ -1294,7 +1336,7 @@ make_hho_stabilization_interface(const cuthho_mesh<T, ET>& msh,
         const auto dphi   = cb.eval_gradients(qp.first);
         const Matrix<T,2,1> n      = level_set_function.normal(qp.first);
         
-        term_1 += qp.second * c_phi * c_phi.transpose() * parms.eta / hT;
+        term_1 += qp.second * c_phi * c_phi.transpose() * cell_eta(msh, cl) / hT;
         term_2 += qp.second * c_phi * (dphi * n).transpose();
         
     }    
@@ -1337,7 +1379,7 @@ make_hho_stabilization_interface(const cuthho_mesh<T, ET>& msh,
 template<typename T, size_t ET, typename F1, typename F2, typename F3>
 Matrix<typename cuthho_mesh<T, ET>::coordinate_type, Dynamic, 1>
 make_rhs(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl,
-         size_t degree, const F1& f, const element_location where, const F2& level_set_function, const F3& bcs, Matrix<T, Dynamic, Dynamic> GR)
+         size_t degree, const F1& f, const element_location where, const F2& level_set_function, const F3& bcs, Matrix<T, Dynamic, Dynamic> GR, size_t method = 1)
 {
     if ( location(msh, cl) == where )
         return make_rhs(msh, cl, degree, f);
@@ -1368,35 +1410,37 @@ make_rhs(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_
         for (auto& qp : qpsi)
         {
             const auto phi = cb.eval_basis(qp.first);
-            // auto dphi = cb.eval_gradients(qp.first);
-            // const auto n = level_set_function.normal(qp.first);
-            // const auto g_phi  = gb.eval_basis(qp.first);
             
             ret.block(0, 0, cbs, 1)
                 += qp.second * bcs(qp.first) * phi * cell_eta(msh, cl)/hT;
-            
-            // source_vect += qp.second * bcs(qp.first) * g_phi * n;
         }
-        
+
         auto qpsi2 = integrate_interface(msh, cl, 2*degree - 1, element_location::IN_NEGATIVE_SIDE);
-        for (auto& qp : qpsi2)
+        if(method == 1)
         {
-            // auto phi = cb.eval_basis(qp.first);
-            // auto dphi = cb.eval_gradients(qp.first);
-            const auto n = level_set_function.normal(qp.first);
-            const auto g_phi  = gb.eval_basis(qp.first);
+            for (auto& qp : qpsi2)
+            {
+                const auto n = level_set_function.normal(qp.first);
+                const auto g_phi  = gb.eval_basis(qp.first);
             
-            // ret.block(0, 0, cbs, 1)
-            //     += qp.second * bcs(qp.first) * phi * cell_eta(msh, cl)/hT;
-            
-            source_vect += qp.second * bcs(qp.first) * g_phi * n;
+                source_vect += qp.second * bcs(qp.first) * g_phi * n;
+            }
+
+            grad_term += GR.transpose() * source_vect;
+
+            ret -= grad_term;
         }
+        else if (method == 2)
+        {
+            for (auto& qp : qpsi2)
+            {
+                const auto n = level_set_function.normal(qp.first);
+                const auto c_dphi  = cb.eval_gradients(qp.first);
+                const auto c_dphi_n  = c_dphi * n;
 
-        // grad_term = source_vect.transpose() * GR;
-        grad_term += GR.transpose() * source_vect;
-
-        ret -= grad_term;
-
+                ret.block(0, 0, cbs, 1) -= qp.second * bcs(qp.first) * c_dphi_n;
+            }
+        }
         return ret;
     }
     else
@@ -2008,6 +2052,38 @@ auto make_fict_condensed_assembler(const Mesh& msh, hho_degree_info hdi, element
 
 
 
+template<typename T, size_t ET, typename F1, typename F2, typename F3>
+std::pair<   Matrix<T, Dynamic, Dynamic>, Matrix<T, Dynamic, 1>  >
+compute_fictdom_contrib(const cuthho_mesh<T, ET>& msh,
+                        const typename cuthho_mesh<T, ET>::cell_type& cl,
+                        const F1& level_set_function, const F2& bcs_fun,
+                        const F3& rhs_fun, const size_t method, const hho_degree_info hdi,
+                        const element_location where = element_location::IN_NEGATIVE_SIDE,
+                        const params<T>& parms = params<T>())
+{
+    /////////   METHOD 1 : USE NON CONSISTENT GRADIENT RECONSTRUCTION
+    if(method == 1)
+    {
+        auto gr = make_hho_gradrec_vector(msh, cl, level_set_function, hdi, where, 1);
+        Matrix<T, Dynamic, Dynamic> stab = make_hho_cut_stabilization(msh, cl, hdi, where);
+        Matrix<T, Dynamic, Dynamic> lc = gr.second + stab;
+        Matrix<T, Dynamic, 1> f = Matrix<T, Dynamic, 1>::Zero(lc.rows());
+        f = make_rhs(msh, cl, hdi.cell_degree(), rhs_fun, where, level_set_function, bcs_fun, gr.first);
+        return std::make_pair(lc, f);
+    }
+    /////////    METHOD 2 : USE NITSCHE'S METHOD
+    else if(method == 2)
+    {
+        auto gr = make_hho_gradrec_vector(msh, cl, level_set_function, hdi, where, 2);
+        Matrix<T, Dynamic, Dynamic> stab = make_hho_cut_stabilization(msh, cl, hdi, where);
+        Matrix<T, Dynamic, Dynamic> Nitsche = make_Nitsche(msh, cl, level_set_function, hdi);
+        Matrix<T, Dynamic, Dynamic> lc = gr.second + stab + Nitsche;
+        // Matrix<T, Dynamic, Dynamic> lc = gr.second + stab;
+        Matrix<T, Dynamic, 1> f = Matrix<T, Dynamic, 1>::Zero(lc.rows());
+        f = make_rhs(msh, cl, hdi.cell_degree(), rhs_fun, where, level_set_function, bcs_fun, gr.first, 2);
+        return std::make_pair(lc, f);
+    }
+}
 
 
 
@@ -2063,6 +2139,7 @@ run_cuthho_fictdom(const Mesh& msh, size_t degree, testType test_case)
     timecounter tc;
 
     bool sc = true; // static condensation
+    size_t method = 1; // 1 : non consistent gradient // 2 : Nitsche
 
     /************** ASSEMBLE PROBLEM **************/
     hho_degree_info hdi(degree+1, degree);
@@ -2081,24 +2158,16 @@ run_cuthho_fictdom(const Mesh& msh, size_t degree, testType test_case)
 
     for (auto& cl : msh.cells)
     {
-        if ( false && !cl.user_data.distorted && location(msh, cl) != element_location::ON_INTERFACE )
-        {
-            // Matrix<RealType, Dynamic, 1> f = Matrix<RealType, Dynamic, 1>::Zero(lc_template.rows());
-            // f = make_rhs(msh, cl, hdi.cell_degree(), rhs_fun, where, level_set_function, bcs_fun);
-            // assembler.assemble(msh, cl, lc_template, f, bcs_fun);
-        }
+        auto contrib = compute_fictdom_contrib(msh, cl, level_set_function, bcs_fun,
+                                               rhs_fun, method, hdi);
+        auto lc = contrib.first;
+        auto f = contrib.second;
+
+
+        if( sc )
+            assembler_sc.assemble(msh, cl, lc, f, bcs_fun);
         else
-        {
-            auto gr = make_hho_gradrec_vector(msh, cl, level_set_function, hdi, where);
-            Matrix<RealType, Dynamic, Dynamic> stab = make_hho_cut_stabilization(msh, cl, hdi, where);            
-            Matrix<RealType, Dynamic, Dynamic> lc = gr.second + stab;
-            Matrix<RealType, Dynamic, 1> f = Matrix<RealType, Dynamic, 1>::Zero(lc.rows());
-            f = make_rhs(msh, cl, hdi.cell_degree(), rhs_fun, where, level_set_function, bcs_fun, gr.first);
-            if( sc )
-                assembler_sc.assemble(msh, cl, lc, f, bcs_fun);
-            else
-                assembler.assemble(msh, cl, lc, f, bcs_fun);
-        }
+            assembler.assemble(msh, cl, lc, f, bcs_fun);
     }
 
     if( sc )
@@ -4336,13 +4405,13 @@ void convergence_test(void)
             T radius = 1.0/3.0;
             auto circle_level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
 
-            auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
+            // auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
             // auto level_set_function = square_level_set<T>(1.05, -0.05, -0.05, 1.05);
             // auto level_set_function = square_level_set<T>(1.0, -0.0, -0.0, 1.0);
-            // auto level_set_function = square_level_set<T>(0.77, 0.23, 0.23, 0.77);
+            auto level_set_function = square_level_set<T>(0.77, 0.23, 0.23, 0.77);
             detect_node_position(msh, level_set_function);
             detect_cut_faces(msh, level_set_function);
-            if(1)  // AGGLOMERATION
+            if(0)  // AGGLOMERATION
             {
                 detect_cut_cells(msh, level_set_function);
                 detect_cell_agglo_set(msh, level_set_function);
@@ -4363,7 +4432,7 @@ void convergence_test(void)
             // auto TI = run_cuthho_interface(msh, level_set_function, k, 3);
 
             // auto TI = run_cuthho_interface(msh, level_set_function, k, 3, test_case);
-            if(0) // sin(\pi x) * sin(\pi y)
+            if(1) // sin(\pi x) * sin(\pi y)
             {
                 auto test_case = make_test_case_laplacian_sin_sin(msh, level_set_function);
                 // TI = run_cuthho_interface(msh, k, 3, test_case);
@@ -4421,7 +4490,7 @@ void convergence_test(void)
                 TI = run_cuthho_interface(msh, k, 3, test_case);
             }
 
-            if(1) // homogeneous test case on a circle
+            if(0) // homogeneous test case on a circle
             {
                 auto test_case = make_test_case_laplacian_circle_hom(msh, circle_level_set_function);
                 // TI = run_cuthho_interface(msh, k, 3, test_case);
