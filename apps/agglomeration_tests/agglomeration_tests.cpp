@@ -432,8 +432,9 @@ int main(int argc, char **argv)
     RealType radius = 1.0/3.0;
     // auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
     // auto level_set_function = line_level_set<RealType>(0.5);
-    auto level_set_function = square_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
+    // auto level_set_function = square_level_set<RealType>(1.0, 0.0, 0.0, 1.0);
     // auto level_set_function = square_level_set<RealType>(0.77, 0.23, 0.23, 0.77);
+    auto level_set_function = square_level_set<RealType>(1.05, -0.05, -0.05, 1.05);
     /************** DO cutHHO MESH PROCESSING **************/
 
     tc.tic();

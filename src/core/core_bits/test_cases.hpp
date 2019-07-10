@@ -121,13 +121,17 @@ class test_case_laplacian_sin_sin_bis: public test_case_laplacian<T, Function, M
         : test_case_laplacian<T, Function, Mesh>
         (level_set__, params<T>(),
          [](const typename Mesh::point_type& pt) -> T { // sol
+            //return 1 + pt.x() + pt.y() + std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());},
             return 1 + std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());},
          [](const typename Mesh::point_type& pt) -> T { // rhs
              return 2.0 * M_PI * M_PI * std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());},
          [](const typename Mesh::point_type& pt) -> T { // bcs
+             // return 1 + pt.x() + pt.y() + std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());},
              return 1 + std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());},
          [](const typename Mesh::point_type& pt) -> auto { // grad
              Matrix<T, 1, 2> ret;
+             // ret(0) = 1 + M_PI * std::cos(M_PI*pt.x()) * std::sin(M_PI*pt.y());
+             // ret(1) = 1 + M_PI * std::sin(M_PI*pt.x()) * std::cos(M_PI*pt.y());
              ret(0) = M_PI * std::cos(M_PI*pt.x()) * std::sin(M_PI*pt.y());
              ret(1) = M_PI * std::sin(M_PI*pt.x()) * std::cos(M_PI*pt.y());
              return ret;},

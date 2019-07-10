@@ -620,7 +620,7 @@ template<typename T, size_t ET>
 T
 cell_eta(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl)
 {
-    return 1000.0;
+    return 30.0;
 }
 
 
@@ -2189,7 +2189,7 @@ run_cuthho_fictdom(const Mesh& msh, size_t degree, testType test_case)
 
     /************** SOLVE **************/
     tc.tic();
-#if 1
+#if 0
     SparseLU<SparseMatrix<RealType>>  solver;
     Matrix<RealType, Dynamic, 1> sol;
 
@@ -2206,7 +2206,7 @@ run_cuthho_fictdom(const Mesh& msh, size_t degree, testType test_case)
         sol = solver.solve(assembler.RHS);
     }
 #endif
-#if 0
+#if 1
     Matrix<RealType, Dynamic, 1> sol;
     cg_params<RealType> cgp;
     cgp.histfile = "cuthho_cg_hist.dat";
@@ -4401,17 +4401,17 @@ void convergence_test(void)
             mip.Nx = N;
             mip.Ny = N;
             cuthho_poly_mesh<T> msh(mip);
-            size_t int_refsteps = 4;
+            size_t int_refsteps = 1;
             T radius = 1.0/3.0;
             auto circle_level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
 
             // auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
-            // auto level_set_function = square_level_set<T>(1.05, -0.05, -0.05, 1.05);
+            auto level_set_function = square_level_set<T>(1.05, -0.05, -0.05, 1.05);
             // auto level_set_function = square_level_set<T>(1.0, -0.0, -0.0, 1.0);
-            auto level_set_function = square_level_set<T>(0.77, 0.23, 0.23, 0.77);
+            // auto level_set_function = square_level_set<T>(0.77, 0.23, 0.23, 0.77);
             detect_node_position(msh, level_set_function);
             detect_cut_faces(msh, level_set_function);
-            if(0)  // AGGLOMERATION
+            if(1)  // AGGLOMERATION
             {
                 detect_cut_cells(msh, level_set_function);
                 detect_cell_agglo_set(msh, level_set_function);
@@ -4432,13 +4432,13 @@ void convergence_test(void)
             // auto TI = run_cuthho_interface(msh, level_set_function, k, 3);
 
             // auto TI = run_cuthho_interface(msh, level_set_function, k, 3, test_case);
-            if(1) // sin(\pi x) * sin(\pi y)
+            if(0) // sin(\pi x) * sin(\pi y)
             {
                 auto test_case = make_test_case_laplacian_sin_sin(msh, level_set_function);
                 // TI = run_cuthho_interface(msh, k, 3, test_case);
                 TI = run_cuthho_fictdom(msh, k, test_case);
             }
-            if(0) // 1 + sin(\pi x) * sin(\pi y)
+            if(1) // 1 + sin(\pi x) * sin(\pi y)
             {
                 auto test_case = make_test_case_laplacian_sin_sin_bis(msh, level_set_function);
                 // TI = run_cuthho_interface(msh, k, 3, test_case);
