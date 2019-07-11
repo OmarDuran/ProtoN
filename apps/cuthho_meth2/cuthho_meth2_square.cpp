@@ -1942,7 +1942,7 @@ public:
             {
                 Matrix<T, Dynamic, Dynamic> mass = make_mass_matrix(msh, fc, facdeg);
                 Matrix<T, Dynamic, 1> loc_rhs = make_rhs(msh, fc, facdeg, dirichlet_bf);
-                dirichlet_data.block(face_i*fbs, 0, fbs, 1) = mass.llt().solve(loc_rhs);
+                dirichlet_data.block(face_i*fbs, 0, fbs, 1) = mass.ldlt().solve(loc_rhs);
             }
         }
 
@@ -1963,13 +1963,12 @@ public:
         }
 
         //RHS
-        for (size_t face_i = 0; face_i < num_faces; face_i++)
+        for (size_t i = 0; i < rhs_sc.rows(); i++)
         {
-            auto fc = fcs[face_i];
-            auto face_offset = offset(msh, fc);
-            auto face_LHS_offset = compress_table.at(face_offset) * fbs;
+            if (!asm_map[i].assemble())
+                continue;
 
-            RHS.block(face_LHS_offset, 0, fbs, 1) += rhs_sc.block(face_i*fbs, 0, fbs, 1);
+            RHS(asm_map[i]) += rhs_sc(i);
         }
 
     } // assemble()
@@ -2006,7 +2005,7 @@ public:
             {
                 Matrix<T, Dynamic, Dynamic> mass = make_mass_matrix(msh, fc, facdeg);
                 Matrix<T, Dynamic, 1> rhs = make_rhs(msh, fc, facdeg, dirichlet_bf);
-                solF.block(face_i*fbs, 0, fbs, 1) = mass.llt().solve(rhs);
+                solF.block(face_i*fbs, 0, fbs, 1) = mass.ldlt().solve(rhs);
             }
             else
             {
@@ -2061,6 +2060,15 @@ compute_fictdom_contrib(const cuthho_mesh<T, ET>& msh,
                         const element_location where = element_location::IN_NEGATIVE_SIDE,
                         const params<T>& parms = params<T>())
 {
+
+    if( location(msh, cl) != element_location::ON_INTERFACE )
+    {
+        auto gr = make_hho_gradrec_vector(msh, cl, hdi);
+        Matrix<T, Dynamic, Dynamic> stab = make_hho_naive_stabilization(msh, cl, hdi);
+        Matrix<T, Dynamic, Dynamic> lc = gr.second + stab;
+        Matrix<T, Dynamic, 1> f = make_rhs(msh, cl, hdi.cell_degree(), rhs_fun);
+        return std::make_pair(lc, f);
+    }
     /////////   METHOD 1 : USE NON CONSISTENT GRADIENT RECONSTRUCTION
     if(method == 1)
     {
@@ -2271,16 +2279,6 @@ run_cuthho_fictdom(const Mesh& msh, size_t degree, testType test_case)
         auto c_val = cell_dofs.dot( c_phi );
         solution_uT.push_back(c_val);
         
-        auto qps = integrate(msh, cl, 5, element_location::IN_NEGATIVE_SIDE);
-        if ( !hide_fict_dom ) qps = integrate(msh, cl, 5/*, element_location::IN_NEGATIVE_SIDE*/);
-        
-        for (auto& qp : qps)
-        {
-            auto tp = qp.first;
-            auto t_phi = cb.eval_basis( tp );
-
-            uT_gp->add_data( tp, cell_dofs.dot(t_phi) );
-        }
 
         if ( location(msh, cl) == element_location::IN_NEGATIVE_SIDE ||
              location(msh, cl) == element_location::ON_INTERFACE )
@@ -2306,6 +2304,7 @@ run_cuthho_fictdom(const Mesh& msh, size_t degree, testType test_case)
                 L2_error += qp.second * (sol_fun(qp.first) - v) * (sol_fun(qp.first) - v);
 
                 int_gp->add_data( qp.first, 1.0 );
+                uT_gp->add_data( qp.first, cell_dofs.dot(t_phi) );
             }
         }
 
@@ -3338,7 +3337,7 @@ compute_interface_contrib(const cuthho_mesh<T, ET>& msh,
 
         auto gr = make_hho_gradrec_vector(msh, cl, hdi);
         Matrix<T, Dynamic, Dynamic> stab = make_hho_naive_stabilization(msh, cl, hdi);
-        Matrix<T, Dynamic, Dynamic> lc = kappa * ( gr.second + stab );
+        lc = kappa * ( gr.second + stab );
         f = make_rhs(msh, cl, hdi.cell_degree(), rhs_fun);
         return std::make_pair(lc, f);
     }
