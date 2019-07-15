@@ -150,7 +150,7 @@ detect_cut_faces(cuthho_mesh<T, ET>& msh, const Function& level_set_function)
             continue;
         }
 
-        auto threshold = diameter(msh, fc) / 1e4;
+        auto threshold = diameter(msh, fc) / 1e12;
         auto pm = find_zero_crossing(pts[0], pts[1], level_set_function, threshold);
 
         /* If node 0 is in the negative region, mark it as node inside, otherwise mark node 1 */
@@ -766,12 +766,12 @@ refine_interface(cuthho_mesh<T, ET>& msh, typename cuthho_mesh<T, ET>::cell_type
 
     if ( !((lm >= 0 && ls1 >= 0) || (lm < 0 && ls1 < 0)) )
     {
-        auto threshold = diameter(msh, cl) / 10000.0;
+        auto threshold = diameter(msh, cl) / 1e12;
         ip = find_zero_crossing(pm, ps1, level_set_function, threshold);
     }
     else if ( !((lm >= 0 && ls2 >= 0) || (lm < 0 && ls2 < 0)) )
     {
-        auto threshold = diameter(msh, cl) / 10000.0;
+        auto threshold = diameter(msh, cl) / 1e12;
         ip = find_zero_crossing(pm, ps2, level_set_function, threshold);
     }
     else
