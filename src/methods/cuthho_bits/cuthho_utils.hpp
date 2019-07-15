@@ -47,7 +47,7 @@ Matrix<T, Dynamic, Dynamic>
 make_mass_matrix(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::face_type& fc,
                  size_t degree, element_location where)
 {
-    face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, degree);
+    cut_face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, degree, where);
     auto fbs = fb.size();
 
     Matrix<T, Dynamic, Dynamic> ret = Matrix<T, Dynamic, Dynamic>::Zero(fbs, fbs);
@@ -88,7 +88,7 @@ Matrix<T, Dynamic, 1>
 make_rhs(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::face_type& fc,
          size_t degree, element_location where, const Function& f)
 {
-    face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, degree);
+    cut_face_basis<cuthho_mesh<T, ET>,T> fb(msh, fc, degree, where);
     auto fbs = fb.size();
 
     Matrix<T, Dynamic, 1> ret = Matrix<T, Dynamic, 1>::Zero(fbs);
