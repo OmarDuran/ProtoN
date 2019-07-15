@@ -1930,18 +1930,20 @@ public:
             auto face_offset = offset(msh, fc);
             auto face_LHS_offset = compress_table.at(face_offset) * fbs;
 
-            bool dirichlet = fc.is_boundary && fc.bndtype == boundary::DIRICHLET;
+            element_location loc_fc = location(msh, fc);
+            bool in_dom = (loc_fc == element_location::ON_INTERFACE ||
+                           loc_fc == loc_zone);
 
-            auto loc = location(msh, fc);
-            bool is_where = (loc == loc_zone) || (loc == element_location::ON_INTERFACE);
+            bool dirichlet = fc.is_boundary && fc.bndtype == boundary::DIRICHLET
+                && in_dom;
 
             for (size_t i = 0; i < fbs; i++)
-                asm_map.push_back( assembly_index(face_LHS_offset+i, !dirichlet && is_where) );
+                asm_map.push_back( assembly_index(face_LHS_offset+i, !dirichlet) );
 
             if (dirichlet)
             {
-                Matrix<T, Dynamic, Dynamic> mass = make_mass_matrix(msh, fc, facdeg);
-                Matrix<T, Dynamic, 1> loc_rhs = make_rhs(msh, fc, facdeg, dirichlet_bf);
+                Matrix<T, Dynamic, Dynamic> mass = make_mass_matrix(msh, fc, facdeg, loc_zone);
+                Matrix<T, Dynamic, 1> loc_rhs = make_rhs(msh, fc, facdeg, loc_zone, dirichlet_bf);
                 dirichlet_data.block(face_i*fbs, 0, fbs, 1) = mass.ldlt().solve(loc_rhs);
             }
         }
@@ -2161,7 +2163,7 @@ run_cuthho_fictdom(const Mesh& msh, size_t degree, testType test_case)
     Matrix<RealType, Dynamic, Dynamic> lc_template = gr_template.second + stab_template;
 
     tc.tic();
-    auto assembler = make_assembler(msh, hdi);
+    auto assembler = make_cut_assembler(msh, hdi, where);
     auto assembler_sc = make_fict_condensed_assembler(msh, hdi, where);
 
     for (auto& cl : msh.cells)
@@ -4355,7 +4357,7 @@ void convergence_test(void)
     mesh_sizes.push_back(32);
     mesh_sizes.push_back(64);
     mesh_sizes.push_back(128);
-    mesh_sizes.push_back(256);
+    // mesh_sizes.push_back(256);
 
     // polynomial orders
     pol_orders.push_back(0);
