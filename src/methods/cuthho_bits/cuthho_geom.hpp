@@ -150,7 +150,7 @@ detect_cut_faces(cuthho_mesh<T, ET>& msh, const Function& level_set_function)
             continue;
         }
 
-        auto threshold = diameter(msh, fc) / 1e12;
+        auto threshold = diameter(msh, fc) / 1e20;
         auto pm = find_zero_crossing(pts[0], pts[1], level_set_function, threshold);
 
         /* If node 0 is in the negative region, mark it as node inside, otherwise mark node 1 */
@@ -766,12 +766,12 @@ refine_interface(cuthho_mesh<T, ET>& msh, typename cuthho_mesh<T, ET>::cell_type
 
     if ( !((lm >= 0 && ls1 >= 0) || (lm < 0 && ls1 < 0)) )
     {
-        auto threshold = diameter(msh, cl) / 1e12;
+        auto threshold = diameter(msh, cl) / 1e20;
         ip = find_zero_crossing(pm, ps1, level_set_function, threshold);
     }
     else if ( !((lm >= 0 && ls2 >= 0) || (lm < 0 && ls2 < 0)) )
     {
-        auto threshold = diameter(msh, cl) / 1e12;
+        auto threshold = diameter(msh, cl) / 1e20;
         ip = find_zero_crossing(pm, ps2, level_set_function, threshold);
     }
     else
@@ -885,6 +885,60 @@ operator<<(std::ostream& os, const temp_tri<T>& t)
     return os;
 }
 
+
+template<typename T, size_t ET>
+typename cuthho_mesh<T, ET>::point_type
+tesselation_center(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl,
+                    element_location where)
+{
+    auto fcs = faces(msh, cl);
+    auto pts = points(msh, cl);
+    auto nds = nodes(msh, cl);
+
+    if (fcs.size() != 4)
+        throw std::invalid_argument("This works only on quads for now");
+
+    if( !is_cut(msh, cl) )
+        throw std::invalid_argument("No tesselation centers for uncut cells");
+
+    // if two consecutive faces are cut
+    // return either the common node or the opposite node
+    for (size_t i = 0; i < fcs.size(); i++)
+    {
+        auto f1 = i;
+        auto f2 = (i+1) % fcs.size();
+        auto n = (i+1) % fcs.size();
+
+        if ( is_cut(msh, fcs[f1]) && is_cut(msh, fcs[f2]) )
+        {
+            if ( location(msh, nds[n]) == where )
+                return pts[n];
+            else
+                return pts[(n+2)%4];
+        }
+    }
+
+    // if two opposite faces are cut
+    // return the center of one of the other faces
+    for (size_t i = 0; i < 2; i++)
+    {
+        auto f1 = i;
+        auto f2 = i+2;
+        auto n = i+1;
+
+        if ( is_cut(msh, fcs[f1]) && is_cut(msh, fcs[f2]) )
+        {
+            if( location(msh, nds[n]) == where )
+                return 0.5*(pts[n] + pts[n+1]);
+            else
+                return 0.5*(pts[(n+2)%4] + pts[(n+3)%4]);
+        }
+    }
+
+    // normally the tesselation center is already found
+    throw std::logic_error("we shouldn't arrive here !!");
+}
+
 template<typename T, size_t ET>
 std::vector<temp_tri<T>>
 triangulate(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl,
@@ -893,7 +947,8 @@ triangulate(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::ce
     assert( is_cut(msh, cl) );
 
     auto tp = collect_triangulation_points(msh, cl, where);
-    auto bar = barycenter(tp);
+    // auto bar = barycenter(tp);
+    auto bar = tesselation_center(msh, cl, where);
 
     std::vector<temp_tri<T>> tris;
 
@@ -931,13 +986,17 @@ measure(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_t
 
 template<typename T, size_t ET>
 std::vector< std::pair<point<T,2>, T> >
-integrate(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl,
-          size_t degree, const element_location& where)
+make_integrate(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl,
+               size_t degree, const element_location& where)
 {
+    std::vector< std::pair<point<T,2>, T> > ret;
+
+    if ( location(msh, cl) != where && location(msh, cl) != element_location::ON_INTERFACE )
+        return ret;
+
     if ( !is_cut(msh, cl) ) /* Element is not cut, use std. integration */
         return integrate(msh, cl, degree);
 
-    std::vector< std::pair<point<T,2>, T> > ret;
     auto tris = triangulate(msh, cl, where);
     for (auto& tri : tris)
     {
@@ -947,6 +1006,24 @@ integrate(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell
 
     return ret;
 }
+
+
+template<typename T, size_t ET>
+std::vector< std::pair<point<T,2>, T> >
+integrate(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl,
+          size_t degree, const element_location& where)
+{
+    if( cl.user_data.integration_n.size() != 0 && where == element_location::IN_NEGATIVE_SIDE)
+        return cl.user_data.integration_n;
+
+    if( cl.user_data.integration_p.size() != 0 && where == element_location::IN_POSITIVE_SIDE)
+        return cl.user_data.integration_p;
+
+    return make_integrate(msh, cl, degree, where);
+}
+
+
+
 
 template<typename T, size_t ET>
 std::vector< std::pair<point<T,2>, T> >
@@ -1808,6 +1885,23 @@ merge_cells(Mesh& msh, const typename Mesh::cell_type cl1,
 
     // for tests
     cl.user_data.highlight = true;
+
+
+    // integration -> save composite quadrature
+    size_t degree_max = 8; //////// VERY IMPORTANT !!!!!!! -> max deg for quadratures = 8
+    auto integration1_n = integrate(msh, cl1, degree_max, element_location::IN_NEGATIVE_SIDE);
+    auto integration1_p = integrate(msh, cl1, degree_max, element_location::IN_POSITIVE_SIDE);
+
+    auto integration2_n = integrate(msh, cl2, degree_max, element_location::IN_NEGATIVE_SIDE);
+    auto integration2_p = integrate(msh, cl2, degree_max, element_location::IN_POSITIVE_SIDE);
+
+    cl.user_data.integration_n = integration1_n;
+    cl.user_data.integration_p = integration1_p;
+    for(size_t i = 0; i < integration2_n.size(); i++)
+        cl.user_data.integration_n.push_back( integration2_n.at(i) );
+
+    for(size_t i = 0; i < integration2_p.size(); i++)
+        cl.user_data.integration_p.push_back( integration2_p.at(i) );
 
     // neighbors ---> NOT DONE : needed to iterate the agglomeration procedure
 

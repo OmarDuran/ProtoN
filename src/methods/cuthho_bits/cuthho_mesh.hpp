@@ -53,6 +53,9 @@ struct cell_cuthho_info
     std::set<size_t>            f_neighbors; // face neighbors
     std::set<size_t>            d_neighbors; // diagonal neighbors
 
+    std::vector< std::pair<point<T,2>, T> > integration_n; // composite integration rules
+    std::vector< std::pair<point<T,2>, T> > integration_p;
+
     bool                        highlight; // for tests
     cell_cuthho_info() :
         location(element_location::UNDEF),

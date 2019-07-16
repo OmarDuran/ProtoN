@@ -250,6 +250,8 @@ triangle_quadrature(const point<T,2>& p0, const point<T,2>& p1, const point<T,2>
 
     auto area = (v0.x() * v1.y() - v0.y() * v1.x()) / 2.0;
     // the area is negative when the points are sorted clockwise
+    if(area < 0)
+        std::cout << "negative weights !!" << std::endl;
 
     using namespace dunavant_quadratures;
 

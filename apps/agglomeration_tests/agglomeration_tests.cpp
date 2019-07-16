@@ -274,6 +274,146 @@ output_mesh_info(const Mesh& msh, const Function& level_set_function)
         std::cerr << "Interface_file has not been opened" << std::endl;
 }
 
+////////////// TEST ON THE INTEGRATION METHOD
+//// write in a file the list of the barycenter used to integrate over cut cells
+template<typename Mesh, typename Function>
+void
+test_bar_integration(Mesh& msh, const Function& level_set_function)
+{
+    // open files
+    std::ofstream neg_file("bar_neg.3D", std::ios::out | std::ios::trunc);
+    std::ofstream pos_file("bar_pos.3D", std::ios::out | std::ios::trunc);
+
+    if( !(neg_file && pos_file) )
+        std::cerr << "bar_file has not been opened" << std::endl;
+
+    neg_file << "X   Y   Z   val" << std::endl;
+    pos_file << "X   Y   Z   val" << std::endl;
+
+    for (auto cl : msh.cells)
+    {
+        if( location(msh, cl) != element_location::ON_INTERFACE )
+            continue;
+
+        // compute the barycenter used for negative and positive integrations
+        // neg
+        auto tp_n = collect_triangulation_points(msh, cl, element_location::IN_NEGATIVE_SIDE );
+        // auto bar_n = barycenter(tp_n);
+        auto bar_n = tesselation_center(msh, cl, element_location::IN_NEGATIVE_SIDE);
+        neg_file << bar_n[0] << "   " <<  bar_n[1] << "   0.0     0.0" << std::endl;
+
+        // pos
+        auto tp_p = collect_triangulation_points(msh, cl, element_location::IN_POSITIVE_SIDE );
+        // auto bar_p = barycenter(tp_p);
+        auto bar_p = tesselation_center(msh, cl, element_location::IN_POSITIVE_SIDE);
+        pos_file << bar_p[0] << "   " <<  bar_p[1] << "   0.0     0.0" << std::endl;
+    }
+
+    // close files
+    neg_file.close();
+    pos_file.close();
+}
+
+
+////////////// TEST ON THE INTEGRATION METHOD
+//// compare usual integration and composite integration
+void
+test_comp_integration()
+{
+    using T = double;
+
+    // use a 10x10 mesh with a square interface
+    mesh_init_params<T> mip;
+    mip.Nx = 10;
+    mip.Ny = 10;
+    cuthho_poly_mesh<T> msh(mip);
+    size_t int_refsteps     = 1;
+
+    auto level_set_function = square_level_set<T>(0.77, 0.23, 0.23, 0.77);
+
+    detect_node_position(msh, level_set_function);
+    detect_cut_faces(msh, level_set_function);
+    detect_cut_cells(msh, level_set_function);
+    detect_cell_agglo_set(msh, level_set_function);
+    make_neighbors_info_cartesian(msh);
+    refine_interface(msh, level_set_function, int_refsteps);
+
+    output_mesh_info(msh, level_set_function);
+
+    auto cl1 = msh.cells[22];
+    auto cl2 = msh.cells[23];
+    auto cl3 = msh.cells[32];
+    auto cl4 = msh.cells[33];
+
+    auto where = element_location::IN_NEGATIVE_SIDE;
+    size_t k = 0;
+
+    for(size_t i = 0; i < 2; i++)
+    {
+        if(i == 0)
+        {
+            std::cout << yellow << "negative side" << std::endl;
+            where = element_location::IN_NEGATIVE_SIDE;
+        }
+        else
+        {
+            std::cout << blue << "positive side" << std::endl;
+            where = element_location::IN_POSITIVE_SIDE;
+        }
+
+        // compute area of cl1 + cl2
+        std::cout << "cl1" << std::endl;
+        T area = 0.0;
+        auto qps_n1 = integrate(msh, cl1, k, where);
+        for (auto& qp : qps_n1)
+        {
+            area += qp.second;
+
+            std::cout << qp.first << "   " << qp.second << std::endl;
+        }
+        std::cout << "cl2" << std::endl;
+        auto qps_n2 = integrate(msh, cl2, k, where);
+        for (auto& qp : qps_n2)
+        {
+            area += qp.second;
+
+            std::cout << qp.first << "   " << qp.second << std::endl;
+        }
+        std::cout << "cl3" << std::endl;
+        auto qps_n3 = integrate(msh, cl3, k, where);
+        for (auto& qp : qps_n3)
+        {
+            area += qp.second;
+
+            std::cout << qp.first << "   " << qp.second << std::endl;
+        }
+        std::cout << "cl4" << std::endl;
+        auto qps_n4 = integrate(msh, cl4, k, where);
+        for (auto& qp : qps_n4)
+        {
+            area += qp.second;
+
+            std::cout << qp.first << "   " << qp.second << std::endl;
+        }
+        std::cout << "area = " << area << std::endl;
+
+        // merge cells and compute the new area
+        auto MC1 = merge_cells(msh, cl1, cl2);
+        auto MC2 = merge_cells(msh, MC1.first, cl3);
+        auto MC = merge_cells(msh, MC2.first, cl4);
+        auto cl = MC.first;
+        area = 0.0;
+        std::cout << "cl" << std::endl;
+        auto qps = integrate(msh, cl, k, where);
+        for (auto& qp : qps)
+        {
+            area += qp.second;
+
+            std::cout << qp.first << "   " << qp.second << std::endl;
+        }
+        std::cout << "area after merging cells = " << area << std::endl;
+    }
+}
 
 
 //////////////  TEST_AGGLO
@@ -321,6 +461,34 @@ test_agglo(Mesh& msh, const Function& level_set_function)
 }
 
 
+//////////////  PLOT_CELLS
+/// plot the cells with gnuplot
+//
+template<typename Mesh, typename Function>
+void
+plot_cells(Mesh& msh, const Function& level_set_function)
+{
+    using T = typename Mesh::coordinate_type;
+
+    postprocess_output<T>  postoutput;
+    auto cells_gp  = std::make_shared< gnuplot_output_object<T> >("cells.dat");
+
+    size_t count = 0;
+
+    for (auto cl : msh.cells)
+    {
+        auto qps = integrate(msh, cl, 1);
+        for (auto& qp : qps)
+        {
+            cells_gp->add_data( qp.first, count );
+        }
+        count++;
+    }
+    postoutput.add_object(cells_gp);
+    postoutput.write();
+}
+
+
 //////////////  TEST_AGGLO_DIAG
 /// test the diagonal merging procedure
 // this routine has been written for a 10x10 mesh
@@ -365,6 +533,14 @@ test_agglo_diag(Mesh& msh, const Function& level_set_function)
     output_mesh_info(msh, level_set_function);
 }
 
+#if 0
+int main(int argc, char **argv)
+{
+    test_comp_integration();
+    return 0;
+}
+#endif
+#if 1
 int main(int argc, char **argv)
 {
     using RealType = double;
@@ -452,6 +628,8 @@ int main(int argc, char **argv)
         // test_agglo_diag(msh, level_set_function);
         make_agglomeration(msh, level_set_function);
         // output_mesh_info(msh, level_set_function);
+        // test_bar_integration(msh, level_set_function);
+        // plot_cells(msh, level_set_function);
     }
     else
     {
@@ -469,3 +647,4 @@ int main(int argc, char **argv)
 
     return 0;
 }
+#endif
