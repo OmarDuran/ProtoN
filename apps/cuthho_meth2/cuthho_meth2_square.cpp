@@ -4542,7 +4542,7 @@ void convergence_test(void)
 }
 
 //////////////////////////     MAIN        ////////////////////////////
-#if 1
+#if 0
 int main(int argc, char **argv)
 {
     convergence_test();
@@ -4552,7 +4552,7 @@ int main(int argc, char **argv)
 }
 #endif
 
-#if 0
+#if 1
 int main(int argc, char **argv)
 {
     using RealType = double;
@@ -4686,11 +4686,15 @@ int main(int argc, char **argv)
         test_projection(msh, level_set_function, degree);
     }
 
+    // jumps sin_sin -> exp_cos
+    auto test_case = make_test_case_laplacian_jumps_1(msh, level_set_function);
+
+
     if (solve_interface)
-        run_cuthho_interface(msh, level_set_function, degree, method);
+        run_cuthho_interface(msh, degree, method, test_case);
     
     if (solve_fictdom)
-        run_cuthho_fictdom(msh, level_set_function, degree);
+        run_cuthho_fictdom(msh, degree, test_case);
 
 
 #if 0
