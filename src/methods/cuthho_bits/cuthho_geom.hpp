@@ -83,7 +83,7 @@ find_zero_crossing(const point<T,2>& p0, const point<T,2>& p1, const Function& l
      * acceptable. Since with 24 iterations we reduce the error by 16384
      * and the worst case is that the two points are at the opposite sides
      * of the element, we put 30 as limit. */
-    size_t max_iter = 30;
+    size_t max_iter = 50;
 
     do {
         auto la = level_set_function(pa);

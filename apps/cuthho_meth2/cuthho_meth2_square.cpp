@@ -620,7 +620,7 @@ template<typename T, size_t ET>
 T
 cell_eta(const cuthho_mesh<T, ET>& msh, const typename cuthho_mesh<T, ET>::cell_type& cl)
 {
-    return 30.0;
+    return 1.0;
 }
 
 
@@ -4402,7 +4402,7 @@ void convergence_test(void)
             mip.Nx = N;
             mip.Ny = N;
             cuthho_poly_mesh<T> msh(mip);
-            size_t int_refsteps = 10;
+            size_t int_refsteps = 4;
             T radius = 1.0/3.0;
             auto circle_level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
 
@@ -4410,6 +4410,7 @@ void convergence_test(void)
             // auto level_set_function = square_level_set<T>(1.05, -0.05, -0.05, 1.05);
             // auto level_set_function = square_level_set<T>(1.0, -0.0, -0.0, 1.0);
             // auto level_set_function = square_level_set<T>(0.77, 0.23, 0.23, 0.77);
+            // auto level_set_function = square_level_set<T>(0.750001, 0.249999, 0.249999, 0.750001);
             detect_node_position(msh, level_set_function);
             detect_cut_faces(msh, level_set_function);
             if(1)  // AGGLOMERATION
@@ -4436,8 +4437,8 @@ void convergence_test(void)
             if(0) // sin(\pi x) * sin(\pi y)
             {
                 auto test_case = make_test_case_laplacian_sin_sin(msh, level_set_function);
-                // TI = run_cuthho_interface(msh, k, 3, test_case);
-                TI = run_cuthho_fictdom(msh, k, test_case);
+                TI = run_cuthho_interface(msh, k, 3, test_case);
+                // TI = run_cuthho_fictdom(msh, k, test_case);
             }
             if(0) // 1 + sin(\pi x) * sin(\pi y)
             {
@@ -4462,7 +4463,7 @@ void convergence_test(void)
                 // TI = run_cuthho_interface(msh, k, 3, test_case);
                 TI = run_cuthho_fictdom(msh, k, test_case);
             }
-            if(1) // jumps sin_sin -> exp_cos
+            if(0) // jumps sin_sin -> exp_cos
             {
                 auto test_case = make_test_case_laplacian_jumps_1(msh, level_set_function);
                 TI = run_cuthho_interface(msh, k, 3, test_case);
@@ -4481,11 +4482,11 @@ void convergence_test(void)
                 auto test_case = make_test_case_laplacian_contrast_2(msh, circle_level_set_function, parms);
                 TI = run_cuthho_interface(msh, k, 3, test_case);
             }
-            if(0) // contrast deg 6
+            if(1) // contrast deg 6
             {
                 auto parms = params<T>();
                 parms.kappa_1 = 1.0;
-                parms.kappa_2 = 1000.0;
+                parms.kappa_2 = 10000.0;
 
                 auto test_case = make_test_case_laplacian_contrast_6(msh, circle_level_set_function, parms);
                 TI = run_cuthho_interface(msh, k, 3, test_case);
@@ -4542,7 +4543,7 @@ void convergence_test(void)
 }
 
 //////////////////////////     MAIN        ////////////////////////////
-#if 0
+#if 1
 int main(int argc, char **argv)
 {
     convergence_test();
@@ -4552,7 +4553,7 @@ int main(int argc, char **argv)
 }
 #endif
 
-#if 1
+#if 0
 int main(int argc, char **argv)
 {
     using RealType = double;
