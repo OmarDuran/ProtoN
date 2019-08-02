@@ -2540,43 +2540,45 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
     //////////////////////   UPDATE THE MESH   ////////////////////////
 
     // remove the agglomerated cells
-    // typename std::vector<typename Mesh::cell_type>::iterator it_RC;
-    // for(it_RC = removed_cells.begin(); it_RC != removed_cells.end(); it_RC++) {
-    //     msh.cells.erase(std::remove(begin(msh.cells), end(msh.cells), *it_RC ), end(msh.cells));
-    // }
     typename std::vector<typename Mesh::cell_type>::iterator it_RC;
-    for(it_RC = removed_cells_bis.begin(); it_RC != removed_cells_bis.end(); it_RC++) {
+    for(it_RC = removed_cells.begin(); it_RC != removed_cells.end(); it_RC++) {
         msh.cells.erase(std::remove(begin(msh.cells), end(msh.cells), *it_RC ), end(msh.cells));
     }
-
-    // // add new cells
-    // for (size_t i = 0; i < loc_agglos.size(); i++)
-    // {
-    //     msh.cells.push_back(loc_agglos.at(i).new_cell);
+    
+    // // remove the agglomerated cells
+    // typename std::vector<typename Mesh::cell_type>::iterator it_RC;
+    // for(it_RC = removed_cells_bis.begin(); it_RC != removed_cells_bis.end(); it_RC++) {
+    //     msh.cells.erase(std::remove(begin(msh.cells), end(msh.cells), *it_RC ), end(msh.cells));
     // }
 
-    
     // add new cells
-    for (size_t i = 0; i < loc_agglos_bis.size(); i++)
+    for (size_t i = 0; i < loc_agglos.size(); i++)
     {
-        msh.cells.push_back(loc_agglos_bis.at(i).new_cell);
+        msh.cells.push_back(loc_agglos.at(i).new_cell);
     }
+
+    
+    // // add new cells
+    // for (size_t i = 0; i < loc_agglos_bis.size(); i++)
+    // {
+    //     msh.cells.push_back(loc_agglos_bis.at(i).new_cell);
+    // }
 
     // sort the new list of cells
     std::sort(msh.cells.begin(), msh.cells.end());
 
-    // // remove faces
-    // typename std::vector<typename Mesh::face_type>::iterator it_RF;
-    // for(it_RF = removed_faces.begin(); it_RF != removed_faces.end(); it_RF++) {
-    //     msh.faces.erase(std::remove(begin(msh.faces), end(msh.faces), *it_RF ), end(msh.faces));
-    // }
-
-    
     // remove faces
     typename std::vector<typename Mesh::face_type>::iterator it_RF;
-    for(it_RF = removed_faces_bis.begin(); it_RF != removed_faces_bis.end(); it_RF++) {
+    for(it_RF = removed_faces.begin(); it_RF != removed_faces.end(); it_RF++) {
         msh.faces.erase(std::remove(begin(msh.faces), end(msh.faces), *it_RF ), end(msh.faces));
     }
+
+    
+    // // remove faces
+    // typename std::vector<typename Mesh::face_type>::iterator it_RF;
+    // for(it_RF = removed_faces_bis.begin(); it_RF != removed_faces_bis.end(); it_RF++) {
+    //     msh.faces.erase(std::remove(begin(msh.faces), end(msh.faces), *it_RF ), end(msh.faces));
+    // }
 
     // sort the new list of faces
     std::sort(msh.faces.begin(), msh.faces.end());
