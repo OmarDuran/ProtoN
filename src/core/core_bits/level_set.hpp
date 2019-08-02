@@ -175,13 +175,19 @@ struct flower_level_set: public level_set<T>
         auto x = pt.x();
         auto y = pt.y();
 
-        T theta = atan((y-beta)/(x-alpha));
+        T theta;
+        if(x == alpha && y < beta)
+            theta = - M_PI / 2.0;
+        else if(x == alpha && y >= beta)
+            theta = M_PI / 2.0;
+        else
+            theta = atan((y-beta)/(x-alpha));
 
         if(x < alpha)
             theta = theta + M_PI;
 
         return (x-alpha)*(x-alpha) + (y-beta)*(y-beta) - radius*radius
-            + a * std::cos(N*theta);
+            - a * std::cos(N*theta);
     }
 
     Eigen::Matrix<T,2,1> gradient(const point<T,2>& pt) const
@@ -190,13 +196,19 @@ struct flower_level_set: public level_set<T>
         auto X = pt.x() - alpha;
         auto Y = pt.y() - beta;
 
-        T theta = atan( Y / X );
+        T theta;
+        if(X == 0 && Y < 0)
+            theta = - M_PI / 2.0;
+        else if(X == 0 && Y >= 0)
+            theta = M_PI / 2.0;
+        else
+            theta = atan( Y / X );
 
         if(pt.x() < alpha)
             theta = theta + M_PI;
         
-        ret(0) = 2*X + a * N * std::sin(N * theta) * Y / (X*X + Y*Y);
-        ret(1) = 2*Y - a * N * std::sin(N * theta) * X / (X*X + Y*Y);
+        ret(0) = 2*X - a * N * std::sin(N * theta) * Y / (X*X + Y*Y);
+        ret(1) = 2*Y + a * N * std::sin(N * theta) * X / (X*X + Y*Y);
         return ret;
     }
 };
