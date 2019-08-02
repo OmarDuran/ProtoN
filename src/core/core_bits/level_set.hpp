@@ -158,3 +158,45 @@ class square_level_set: public level_set<T>
     }
 };
 
+
+
+template<typename T>
+struct flower_level_set: public level_set<T>
+{
+    T radius, alpha, beta, a;
+    size_t N;
+
+    flower_level_set(T r, T al, T b, size_t N_, T a_)
+        : radius(r), alpha(al), beta(b), N(N_), a(a_)
+    {}
+
+    T operator()(const point<T,2>& pt) const
+    {
+        auto x = pt.x();
+        auto y = pt.y();
+
+        T theta = atan((y-beta)/(x-alpha));
+
+        if(x < alpha)
+            theta = theta + M_PI;
+
+        return (x-alpha)*(x-alpha) + (y-beta)*(y-beta) - radius*radius
+            + a * std::cos(N*theta);
+    }
+
+    Eigen::Matrix<T,2,1> gradient(const point<T,2>& pt) const
+    {
+        Eigen::Matrix<T,2,1> ret;
+        auto X = pt.x() - alpha;
+        auto Y = pt.y() - beta;
+
+        T theta = atan( Y / X );
+
+        if(pt.x() < alpha)
+            theta = theta + M_PI;
+        
+        ret(0) = 2*X + a * N * std::sin(N * theta) * Y / (X*X + Y*Y);
+        ret(1) = 2*Y - a * N * std::sin(N * theta) * X / (X*X + Y*Y);
+        return ret;
+    }
+};
