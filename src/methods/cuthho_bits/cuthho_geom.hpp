@@ -2006,6 +2006,12 @@ find_good_neighbor(const Mesh& msh, const typename Mesh::cell_type cl,
 {
     typename Mesh::cell_type best_neigh = cl;
 
+    element_location other_where;
+    if(where == element_location::IN_NEGATIVE_SIDE)
+        other_where = element_location::IN_POSITIVE_SIDE;
+    else
+        other_where = element_location::IN_NEGATIVE_SIDE;
+
     // look for a neighboring cell to merge with
     typename Mesh::coordinate_type area = 1000000;
 
@@ -2027,10 +2033,10 @@ find_good_neighbor(const Mesh& msh, const typename Mesh::cell_type cl,
         if (where == element_location::IN_POSITIVE_SIDE && cl_n.user_data.agglo_set == cell_agglo_set::T_KO_POS)
             continue;
 
-        // search for the "best" neighbor -> the one with the smallest volume
-        if( area > measure(msh, cl_n, where) )
+        // search for the "best" neighbor -> the one with the smallest volume in other_where
+        if( area > measure(msh, cl_n, other_where) )
         {
-            area = measure(msh, cl_n, where);
+            area = measure(msh, cl_n, other_where);
             best_neigh = cl_n;
         }
     }
@@ -2049,9 +2055,9 @@ find_good_neighbor(const Mesh& msh, const typename Mesh::cell_type cl,
                 continue;
 
             // search for the "best" neighbor -> the one with the smallest volume
-            if( area > measure(msh, cl_n, where) )
+            if( area > measure(msh, cl_n, other_where) )
             {
-                area = measure(msh, cl_n, where);
+                area = measure(msh, cl_n, other_where);
                 best_neigh = cl_n;
             }
         }
@@ -2147,6 +2153,79 @@ check_corner(Mesh& msh, typename Mesh::cell_type cl_agglo, typename Mesh::cell_t
 
 }
 
+
+////// output_agglo_lists
+// output a .okc file
+// can plot arrows with visit
+// represent the lists of agglomerations
+template<typename Mesh>
+void
+output_agglo_lists(Mesh& msh, std::vector<int> table_neg, std::vector<int> table_pos,
+                   std::string file)
+{
+    // number of arrows
+    size_t nb_arrows = 0;
+    for(size_t i=0; i<table_neg.size(); i++)
+    {
+        if(table_neg.at(i) != -1)
+            nb_arrows++;
+        if(table_pos.at(i) != -1)
+            nb_arrows++;
+    }
+
+    // initiate the output file
+    std::ofstream output(file, std::ios::out | std::ios::trunc);
+    if( !output )
+        std::cerr << "agglo output file has not been opened" << std::endl;
+
+    output << "5 " << nb_arrows << " 12" << std::endl;
+    output << "x" << std::endl;
+    output << "y" << std::endl;
+    output << "z" << std::endl;
+    output << "u" << std::endl;
+    output << "v" << std::endl;
+
+    output << "0.  1.  10" << std::endl;
+    output << "0.  1.  10" << std::endl;
+    output << "0.  0.  10" << std::endl;
+    output << "-1  1.  10" << std::endl;
+    output << "-1  1.  10" << std::endl;
+
+
+    // loop on the cells
+    size_t cp = 0;
+    for (auto cl : msh.cells)
+    {
+        size_t TN = table_neg.at(cp);
+        if( TN != -1)
+        {
+            auto bar_cl = barycenter(msh,cl);
+            auto bar_neigh = barycenter(msh,msh.cells.at(TN));
+
+            auto vect = bar_neigh - bar_cl;
+
+            output << bar_cl[0] << "   " << bar_cl[1] << "   0.   "
+                   << vect[0] << "   " << vect[1] << std::endl;
+        }
+
+
+        size_t TP = table_pos.at(cp);
+        if( TP != -1)
+        {
+            auto bar_cl = barycenter(msh,cl);
+            auto bar_neigh = barycenter(msh,msh.cells.at(TP));
+
+            auto vect = bar_neigh - bar_cl;
+
+            output << bar_cl[0] << "   " << bar_cl[1] << "   0.   "
+                   << vect[0] << "   " << vect[1] << std::endl;
+        }
+        cp++;
+    }
+
+    output.close();
+}
+
 ////// make_agglomeration
 // the main agglomeration routine
 // currently, the mesh obtained must have convex cells
@@ -2172,6 +2251,8 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
     }
 
     ///////////////////////   LOOK FOR NEIGHBORS  ////////////////
+    size_t nb_step1 = 0;
+    size_t nb_step2 = 0;
     // start the process for domain 1, and then domain 2
     for(size_t domain=1; domain < 3; domain++)
     {
@@ -2223,15 +2304,27 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
             size_t offset2 = offset(msh,best_neigh);
 
             if(where == element_location::IN_NEGATIVE_SIDE)
+            {
                 agglo_table_neg.at(offset1) = offset2;
+                nb_step1++;
+            }
             else
+            {
                 agglo_table_pos.at(offset1) = offset2;
+                nb_step2++;
+            }
         }
+
+        if(domain == 1)
+            output_agglo_lists(msh, agglo_table_neg, agglo_table_pos, "agglo_one.okc");
+        if(domain == 2)
+            output_agglo_lists(msh, agglo_table_neg, agglo_table_pos, "agglo_two.okc");
     }
     //////////////   CHANGE THE AGGLO FOR THE CELLS OF DOMAIN 1 THAT ARE TARGETTED ///////
+    size_t nb_step3 = 0;
     for (auto cl : msh.cells)
     {
-        if(cl.user_data.agglo_set != cell_agglo_set::T_KO_POS)
+        if(cl.user_data.agglo_set != cell_agglo_set::T_KO_NEG)
             continue;
 
         size_t offset1 = offset(msh,cl);
@@ -2239,9 +2332,9 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
         // are there cells that try to agglomerate with cl ?
         bool agglo = false;
         size_t cl2_offset;
-        for(size_t i = 0; i < agglo_table_neg.size(); i++)
+        for(size_t i = 0; i < agglo_table_pos.size(); i++)
         {
-            if(agglo_table_neg.at(i) == offset1)
+            if(agglo_table_pos.at(i) == offset1)
             {
                 agglo = true;
                 cl2_offset = i;
@@ -2252,26 +2345,30 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
             continue;
 
         // at this point cl2_offset tries to agglomerate with cl
-        size_t cl1_agglo = agglo_table_pos.at(offset1);
+        size_t cl1_agglo = agglo_table_neg.at(offset1);
         
         // -> check that no one tries to agglomerate with cl1_agglo
         agglo = false;
-        for(size_t i = 0; i < agglo_table_pos.size(); i++)
+        for(size_t i = 0; i < agglo_table_neg.size(); i++)
         {
-            if(agglo_table_pos.at(i) == cl1_agglo)
+            if( i == offset1)
+                continue;
+
+            if(agglo_table_neg.at(i) == cl1_agglo)
             {
                 agglo = true;
                 break;
             }
         }
-        if(!agglo)
+        if(!agglo && msh.cells.at(cl1_agglo).user_data.agglo_set == cell_agglo_set::T_KO_POS)
             continue;
 
         // at this point we risk chain agglomerations
-        // -> change the target of cl
-        // agglo_table_pos.at(offset1) = cl2_offset;
-        agglo_table_pos.at(offset1) = -1;
+        // -> remove the target of cl
+        nb_step3++;
+        agglo_table_neg.at(offset1) = -1;
     }
+    output_agglo_lists(msh, agglo_table_neg, agglo_table_pos, "agglo_three.okc");
     
     ///////////////////  BUILD LOCAL AGGLOMERATIONS  //////////////////
     std::vector< loc_agglo<typename Mesh::cell_type> > loc_agglos;
@@ -2301,14 +2398,14 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
 
         
         // test if one of the two cells is already agglomerated
-        size_t agglo_offset;
+        size_t agglo_offset_cl, agglo_offset_neigh;
         bool already_agglo_cl = false;
         for (size_t i = 0; i < loc_agglos.size(); i++)
         {
             if( loc_agglos.at(i).is_in(cl) )
             {
                 already_agglo_cl = true;
-                agglo_offset = i;
+                agglo_offset_cl = i;
                 break;
             }
         }
@@ -2318,14 +2415,22 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
             if( loc_agglos.at(i).is_in(neigh) )
             {
                 already_agglo_neigh = true;
-                agglo_offset = i;
+                agglo_offset_neigh = i;
                 break;
             }
         }
 
-        // the two cells can not be both already agglomerated 
+        // the two cells can not be both already agglomerated in different agglomeration sets
         if(already_agglo_cl && already_agglo_neigh)
-            throw std::logic_error("Both cells already agglomerated !!");
+        {
+            if(agglo_offset_neigh != agglo_offset_cl)
+            {
+                throw std::logic_error("Both cells already agglomerated !!");
+            }
+            else
+                std::cout << "agglo already done" << std::endl;
+            // else : the two cells are already agglomerated together : DO NOTHING
+        }
         else if(!already_agglo_cl && !already_agglo_neigh)
         {
             // create a new local agglomeration
@@ -2343,18 +2448,20 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
         else // only one cell is already agglomerated
         {
             typename Mesh::cell_type cl1, cl2;
-            size_t offset_cl2;
+            size_t offset_cl2, agglo_offset;
             if(already_agglo_cl)
             {
                 removed_cells.push_back(neigh);
                 cl2 = neigh;
                 offset_cl2 = offset_neigh;
+                agglo_offset = agglo_offset_cl;
             }
             else if(already_agglo_neigh)
             {
                 removed_cells.push_back(cl);
                 cl2 = cl;
                 offset_cl2 = offset_cl;
+                agglo_offset = agglo_offset_neigh;
             }
 
             // get the agglomerated cell
@@ -2389,6 +2496,13 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
     }
     
     //////////////////////   UPDATE THE MESH   ////////////////////////
+    size_t nb_cells_before = msh.cells.size();
+    size_t nb_cut_before = 0;
+    for (auto& cl : msh.cells)
+    {
+        if( location(msh, cl) == element_location::ON_INTERFACE )
+            nb_cut_before++;
+    }
 
     // remove the agglomerated cells
     typename std::vector<typename Mesh::cell_type>::iterator it_RC;
@@ -2414,6 +2528,27 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
 
     // sort the new list of faces
     std::sort(msh.faces.begin(), msh.faces.end());
+
+    size_t nb_cells_after = msh.cells.size();
+    size_t nb_cut_after = 0;
+    for (auto& cl : msh.cells)
+    {
+        if( location(msh, cl) == element_location::ON_INTERFACE )
+            nb_cut_after++;
+    }
+
+    ////////////  output some info
+    std::ofstream output_cells("output_cells.txt", std::ios::out | std::ios::trunc);
+    output_cells << " NB_CELLS_BEFORE = " << nb_cells_before << std::endl;
+    output_cells << " NB_CELLS_AFTER = " << nb_cells_after << std::endl;
+    output_cells << " NB_CUT_CELLS_BEFORE = " << nb_cut_before << std::endl;
+    output_cells << " NB_CUT_CELLS_AFTER = " << nb_cut_after << std::endl;
+
+    output_cells << " NB_CELLS_STEP_1 = " << nb_step1 << std::endl;
+    output_cells << " NB_CELLS_STEP_2 = " << nb_step2 << std::endl;
+    output_cells << " NB_CELLS_STEP_3 = " << nb_step3 << std::endl;
+
+    output_cells.close();
 }
 
 
