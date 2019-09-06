@@ -4402,15 +4402,16 @@ void convergence_test(void)
             mip.Nx = N;
             mip.Ny = N;
             cuthho_poly_mesh<T> msh(mip);
-            size_t int_refsteps = 4;
+            size_t int_refsteps = 1;
             T radius = 1.0/3.0;
             auto circle_level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
 
-            auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
+            // auto level_set_function = flower_level_set<T>(0.31, 0.5, 0.5, 4, 0.04);
+            // auto level_set_function = circle_level_set<T>(radius, 0.5, 0.5);
             // auto level_set_function = square_level_set<T>(1.05, -0.05, -0.05, 1.05);
             // auto level_set_function = square_level_set<T>(1.0, -0.0, -0.0, 1.0);
-            // auto level_set_function = square_level_set<T>(0.77, 0.23, 0.23, 0.77);
-            // auto level_set_function = square_level_set<T>(0.750001, 0.249999, 0.249999, 0.750001);
+            // auto level_set_function = square_level_set<T>(0.76, 0.24, 0.24, 0.76);
+            auto level_set_function = square_level_set<T>(0.751, 0.249, 0.249, 0.751);
             detect_node_position(msh, level_set_function);
             detect_cut_faces(msh, level_set_function);
             if(1)  // AGGLOMERATION
@@ -4463,7 +4464,7 @@ void convergence_test(void)
                 // TI = run_cuthho_interface(msh, k, 3, test_case);
                 TI = run_cuthho_fictdom(msh, k, test_case);
             }
-            if(0) // jumps sin_sin -> exp_cos
+            if(1) // jumps sin_sin -> exp_cos
             {
                 auto test_case = make_test_case_laplacian_jumps_1(msh, level_set_function);
                 TI = run_cuthho_interface(msh, k, 3, test_case);
@@ -4471,6 +4472,11 @@ void convergence_test(void)
             if(0) // jumps2 exp_cos -> sin_sin
             {
                 auto test_case = make_test_case_laplacian_jumps_2(msh, level_set_function);
+                TI = run_cuthho_interface(msh, k, 3, test_case);
+            }
+            if(0) // jumps3 sin_sin -> sin_sin + pol
+            {
+                auto test_case = make_test_case_laplacian_jumps_3(msh, level_set_function);
                 TI = run_cuthho_interface(msh, k, 3, test_case);
             }
             if(0) // contrast deg 2
@@ -4482,11 +4488,11 @@ void convergence_test(void)
                 auto test_case = make_test_case_laplacian_contrast_2(msh, circle_level_set_function, parms);
                 TI = run_cuthho_interface(msh, k, 3, test_case);
             }
-            if(1) // contrast deg 6
+            if(0) // contrast deg 6
             {
                 auto parms = params<T>();
                 parms.kappa_1 = 1.0;
-                parms.kappa_2 = 10000.0;
+                parms.kappa_2 = 1.0;
 
                 auto test_case = make_test_case_laplacian_contrast_6(msh, circle_level_set_function, parms);
                 TI = run_cuthho_interface(msh, k, 3, test_case);
@@ -4650,8 +4656,9 @@ int main(int argc, char **argv)
     std::cout << bold << yellow << "Mesh generation: " << tc << " seconds" << reset << std::endl;
     /************** LEVEL SET FUNCTION **************/
     RealType radius = 1.0/3.0;
-    auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
-    //auto level_set_function = line_level_set<RealType>(0.5);
+    // auto level_set_function = circle_level_set<RealType>(radius, 0.5, 0.5);
+    // auto level_set_function = line_level_set<RealType>(0.5);
+    auto level_set_function = flower_level_set<RealType>(0.31, 0.5, 0.5, 4, 0.04);
     /************** DO cutHHO MESH PROCESSING **************/
 
     tc.tic();
@@ -4687,9 +4694,12 @@ int main(int argc, char **argv)
         test_projection(msh, level_set_function, degree);
     }
 
-    // jumps sin_sin -> exp_cos
-    auto test_case = make_test_case_laplacian_jumps_1(msh, level_set_function);
+    output_mesh_info(msh, level_set_function);
 
+    // jumps sin_sin -> exp_cos
+    // auto test_case = make_test_case_laplacian_jumps_1(msh, level_set_function);
+    // jumps3 sin_sin -> sin_sin + pol
+    auto test_case = make_test_case_laplacian_jumps_3(msh, level_set_function);
 
     if (solve_interface)
         run_cuthho_interface(msh, degree, method, test_case);

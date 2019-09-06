@@ -168,7 +168,7 @@ detect_cell_agglo_set(cuthho_mesh<T, ET>& msh, const Function& level_set_functio
     typedef typename cuthho_mesh<T, ET>::point_type point_type;
 
     const T threshold = 0.3;
-    const T threshold_cells = 0.2;
+    const T threshold_cells = 0.3;
 
     for (auto& cl : msh.cells)
     {
@@ -2497,11 +2497,25 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
     
     //////////////////////   UPDATE THE MESH   ////////////////////////
     size_t nb_cells_before = msh.cells.size();
+    size_t nb_cells_ok = 0;
+    size_t nb_cells_ko1 = 0;
+    size_t nb_cells_ko2 = 0;
     size_t nb_cut_before = 0;
     for (auto& cl : msh.cells)
     {
         if( location(msh, cl) == element_location::ON_INTERFACE )
             nb_cut_before++;
+        else
+            continue;
+
+        if( cl.user_data.agglo_set == cell_agglo_set::T_OK )
+            nb_cells_ok++;
+        else if( cl.user_data.agglo_set == cell_agglo_set::T_KO_NEG )
+            nb_cells_ko1++;
+        else if( cl.user_data.agglo_set == cell_agglo_set::T_KO_POS )
+            nb_cells_ko2++;
+        else
+            throw std::logic_error("We should not arrive here !!");
     }
 
     // remove the agglomerated cells
@@ -2543,6 +2557,10 @@ make_agglomeration(Mesh& msh, const Function& level_set_function)
     output_cells << " NB_CELLS_AFTER = " << nb_cells_after << std::endl;
     output_cells << " NB_CUT_CELLS_BEFORE = " << nb_cut_before << std::endl;
     output_cells << " NB_CUT_CELLS_AFTER = " << nb_cut_after << std::endl;
+
+    output_cells << " NB_CELLS_OK = " << nb_cells_ok << std::endl;
+    output_cells << " NB_CELLS_KO1 = " << nb_cells_ko1 << std::endl;
+    output_cells << " NB_CELLS_KO2 = " << nb_cells_ko2 << std::endl;
 
     output_cells << " NB_CELLS_STEP_1 = " << nb_step1 << std::endl;
     output_cells << " NB_CELLS_STEP_2 = " << nb_step2 << std::endl;

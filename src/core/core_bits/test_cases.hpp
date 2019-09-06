@@ -317,6 +317,58 @@ auto make_test_case_laplacian_jumps_2(const Mesh& msh, Function level_set_functi
     return test_case_laplacian_jumps_2<typename Mesh::coordinate_type, Function, Mesh>(level_set_function);
 }
 
+
+///// test_case_laplacian_jumps_3
+// exact solution : sin(\pi x) sin(\pi y)               in \Omega_1
+//                  sin(\pi x) sin(\pi y) + 2 + x^3 * y^3   in \Omega_2
+// \kappa_1 = \kappa_2 = 1
+template<typename T, typename Function, typename Mesh>
+class test_case_laplacian_jumps_3: public test_case_laplacian<T, Function, Mesh>
+{
+   public:
+    test_case_laplacian_jumps_3(Function level_set__)
+        : test_case_laplacian<T, Function, Mesh>
+        (level_set__, params<T>(),
+         [level_set__](const typename Mesh::point_type& pt) -> T { /* sol */
+            if(level_set__(pt) > 0)
+                return std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y())
+                    + 2. + pt.x() * pt.x() * pt.x() * pt.y() * pt.y() * pt.y();
+            else return std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());},
+         [level_set__](const typename Mesh::point_type& pt) -> T { /* rhs */
+             if(level_set__(pt) > 0)
+                 return 2.0 * M_PI * M_PI * std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y()) - 6 * pt.x() * pt.y() * (pt.x() * pt.x() + pt.y() * pt.y() );
+            else return 2.0 * M_PI * M_PI * std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());},
+         [level_set__](const typename Mesh::point_type& pt) -> T { // bcs
+             if(level_set__(pt) > 0)
+                return std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y()) + 2.
+                    + pt.x() * pt.x() * pt.x() * pt.y() * pt.y() * pt.y();
+            else return std::sin(M_PI*pt.x()) * std::sin(M_PI*pt.y());},
+         [level_set__](const typename Mesh::point_type& pt) -> auto { // grad
+             Matrix<T, 1, 2> ret;
+             if(level_set__(pt) > 0)
+             {
+                 ret(0) = M_PI * std::cos(M_PI*pt.x()) * std::sin(M_PI*pt.y()) + 3*pt.x()*pt.x()*pt.y()*pt.y()*pt.y();
+                 ret(1) = M_PI * std::sin(M_PI*pt.x()) * std::cos(M_PI*pt.y()) + 3*pt.x()*pt.x()*pt.x()*pt.y()*pt.y();
+                 return ret;
+             }
+             else {
+                 ret(0) = M_PI * std::cos(M_PI*pt.x()) * std::sin(M_PI*pt.y());
+                 ret(1) = M_PI * std::sin(M_PI*pt.x()) * std::cos(M_PI*pt.y());
+                 return ret;}},
+         [](const typename Mesh::point_type& pt) -> T {/* Dir */
+             return - 2. - pt.x() * pt.x() * pt.x() * pt.y() * pt.y() * pt.y();},
+         [level_set__](const typename Mesh::point_type& pt) -> T {/* Neu */
+             Matrix<T, 1, 2> normal = level_set__.normal(pt);
+             return -3 * pt.x() * pt.x() * pt.y() * pt.y() * (pt.y() * normal(0) + pt.x() * normal(1));})
+        {}
+};
+
+template<typename Mesh, typename Function>
+auto make_test_case_laplacian_jumps_3(const Mesh& msh, Function level_set_function)
+{
+    return test_case_laplacian_jumps_3<typename Mesh::coordinate_type, Function, Mesh>(level_set_function);
+}
+
 ////////////////////  TESTS CASES FOR CIRCLES   ////////////////////////////
 
 ///// test_case_laplacian_contrast_2
